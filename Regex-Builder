@@ -1,0 +1,539 @@
+import { useState, useEffect, useRef } from "react";
+import { Link } from "wouter";
+import { motion, AnimatePresence } from "framer-motion";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
+import { Input } from "@/components/ui/input";
+import { Code2, ArrowLeft, Check, X, Trophy, ChevronRight, Lightbulb } from "lucide-react";
+
+type MachineViz = {
+  type: "DFA" | "NFA" | "TM";
+  states: { name: string; isStart: boolean; isAccept: boolean }[];
+  transitions: { from: string; on: string; to: string | string[] }[];
+  description: string;
+};
+
+type Puzzle = {
+  id: string;
+  regex: RegExp;
+  regexDisplay: string;
+  title: string;
+  challenge: string;
+  hint: string;
+  machine: MachineViz;
+  sampleRejects: string[];
+};
+
+const PUZZLES: Puzzle[] = [
+  {
+    id: "p1",
+    regex: /^a+$/,
+    regexDisplay: "a+",
+    title: "Pure A's",
+    challenge: "Type a string of one or more 'a's — no other symbols allowed.",
+    hint: "Try: a, aa, aaa",
+    sampleRejects: ["b", "ab", "ba", ""],
+    machine: {
+      type: "DFA",
+      description: "DFA accepting one or more 'a's over {a,b}.",
+      states: [
+        { name: "q0", isStart: true, isAccept: false },
+        { name: "q1", isStart: false, isAccept: true },
+        { name: "dead", isStart: false, isAccept: false },
+      ],
+      transitions: [
+        { from: "q0", on: "a", to: "q1" },
+        { from: "q0", on: "b", to: "dead" },
+        { from: "q1", on: "a", to: "q1" },
+        { from: "q1", on: "b", to: "dead" },
+        { from: "dead", on: "a", to: "dead" },
+        { from: "dead", on: "b", to: "dead" },
+      ],
+    },
+  },
+  {
+    id: "p2",
+    regex: /^(0|1)*1$/,
+    regexDisplay: "(0|1)*1",
+    title: "Ends in 1",
+    challenge: "Type a binary string that ends with '1'. Can be any length.",
+    hint: "Try: 1, 01, 101, 0001",
+    sampleRejects: ["0", "10", "00", ""],
+    machine: {
+      type: "DFA",
+      description: "DFA over {0,1} accepting strings ending in '1'.",
+      states: [
+        { name: "q0", isStart: true, isAccept: false },
+        { name: "q1", isStart: false, isAccept: true },
+      ],
+      transitions: [
+        { from: "q0", on: "0", to: "q0" },
+        { from: "q0", on: "1", to: "q1" },
+        { from: "q1", on: "0", to: "q0" },
+        { from: "q1", on: "1", to: "q1" },
+      ],
+    },
+  },
+  {
+    id: "p3",
+    regex: /^(ab)+$/,
+    regexDisplay: "(ab)+",
+    title: "Alternating AB",
+    challenge: "Type 'ab' repeated one or more times. No other pattern works.",
+    hint: "Try: ab, abab, ababab",
+    sampleRejects: ["a", "b", "aba", "bab", "aabb", ""],
+    machine: {
+      type: "DFA",
+      description: "DFA over {a,b} accepting (ab)⁺.",
+      states: [
+        { name: "q0", isStart: true, isAccept: false },
+        { name: "q1", isStart: false, isAccept: false },
+        { name: "q2", isStart: false, isAccept: true },
+        { name: "dead", isStart: false, isAccept: false },
+      ],
+      transitions: [
+        { from: "q0", on: "a", to: "q1" },
+        { from: "q0", on: "b", to: "dead" },
+        { from: "q1", on: "b", to: "q2" },
+        { from: "q1", on: "a", to: "dead" },
+        { from: "q2", on: "a", to: "q1" },
+        { from: "q2", on: "b", to: "dead" },
+        { from: "dead", on: "a", to: "dead" },
+        { from: "dead", on: "b", to: "dead" },
+      ],
+    },
+  },
+  {
+    id: "p4",
+    regex: /^(a|b)*bb(a|b)*$/,
+    regexDisplay: "(a|b)*bb(a|b)*",
+    title: "Contains 'bb'",
+    challenge: "Type a string over {a,b} that contains 'bb' somewhere.",
+    hint: "Try: bb, abb, bba, abba",
+    sampleRejects: ["a", "b", "ab", "aba", ""],
+    machine: {
+      type: "NFA",
+      description: "NFA over {a,b} accepting strings containing 'bb'. Nondeterministically guesses where 'bb' starts.",
+      states: [
+        { name: "q0", isStart: true, isAccept: false },
+        { name: "q1", isStart: false, isAccept: false },
+        { name: "q2", isStart: false, isAccept: true },
+      ],
+      transitions: [
+        { from: "q0", on: "a", to: "q0" },
+        { from: "q0", on: "b", to: ["q0", "q1"] },
+        { from: "q1", on: "b", to: "q2" },
+        { from: "q2", on: "a", to: "q2" },
+        { from: "q2", on: "b", to: "q2" },
+      ],
+    },
+  },
+  {
+    id: "p5",
+    regex: /^0*(10+)*$/,
+    regexDisplay: "0*(10+)*",
+    title: "No Two Ones Adjacent",
+    challenge: "Type a binary string where no two 1's are next to each other.",
+    hint: "Try: 0, 10, 101, 0100, 1010",
+    sampleRejects: ["11", "011", "110", "1001"],
+    machine: {
+      type: "DFA",
+      description: "DFA over {0,1}: accepts if no '11' appears anywhere.",
+      states: [
+        { name: "q0", isStart: true, isAccept: true },
+        { name: "q1", isStart: false, isAccept: true },
+        { name: "dead", isStart: false, isAccept: false },
+      ],
+      transitions: [
+        { from: "q0", on: "0", to: "q0" },
+        { from: "q0", on: "1", to: "q1" },
+        { from: "q1", on: "0", to: "q0" },
+        { from: "q1", on: "1", to: "dead" },
+        { from: "dead", on: "0", to: "dead" },
+        { from: "dead", on: "1", to: "dead" },
+      ],
+    },
+  },
+  {
+    id: "p6",
+    regex: /^a(b|c)+a$/,
+    regexDisplay: "a(b|c)+a",
+    title: "Sandwiched",
+    challenge: "Start with 'a', end with 'a', and have one or more b's or c's in the middle.",
+    hint: "Try: aba, aca, abca, abba",
+    sampleRejects: ["aa", "ab", "ba", "abcd", ""],
+    machine: {
+      type: "NFA",
+      description: "NFA over {a,b,c} for a(b|c)+a.",
+      states: [
+        { name: "q0", isStart: true, isAccept: false },
+        { name: "q1", isStart: false, isAccept: false },
+        { name: "q2", isStart: false, isAccept: false },
+        { name: "q3", isStart: false, isAccept: true },
+      ],
+      transitions: [
+        { from: "q0", on: "a", to: "q1" },
+        { from: "q1", on: "b", to: "q2" },
+        { from: "q1", on: "c", to: "q2" },
+        { from: "q2", on: "b", to: "q2" },
+        { from: "q2", on: "c", to: "q2" },
+        { from: "q2", on: "a", to: "q3" },
+      ],
+    },
+  },
+  {
+    id: "p7",
+    regex: /^([01]{2})+$/,
+    regexDisplay: "([01]{2})+",
+    title: "Even Length Binary",
+    challenge: "Type a binary string with even length (at least 2 chars).",
+    hint: "Try: 00, 11, 0110, 1001",
+    sampleRejects: ["0", "1", "001", "111", ""],
+    machine: {
+      type: "DFA",
+      description: "DFA over {0,1} accepting strings with even length >= 2.",
+      states: [
+        { name: "q0", isStart: true, isAccept: false },
+        { name: "q1", isStart: false, isAccept: false },
+        { name: "q2", isStart: false, isAccept: true },
+        { name: "q3", isStart: false, isAccept: false },
+      ],
+      transitions: [
+        { from: "q0", on: "0", to: "q1" },
+        { from: "q0", on: "1", to: "q1" },
+        { from: "q1", on: "0", to: "q2" },
+        { from: "q1", on: "1", to: "q2" },
+        { from: "q2", on: "0", to: "q3" },
+        { from: "q2", on: "1", to: "q3" },
+        { from: "q3", on: "0", to: "q2" },
+        { from: "q3", on: "1", to: "q2" },
+      ],
+    },
+  },
+  {
+    id: "p8",
+    regex: /^(a*b)*a*$/,
+    regexDisplay: "(a*b)*a*",
+    title: "Any String Over {a,b}",
+    challenge: "Type any non-empty string over {a, b}. This machine accepts all of them!",
+    hint: "Try: a, b, ab, ba, aaabbb — literally anything works.",
+    sampleRejects: ["c", "1", "abc"],
+    machine: {
+      type: "NFA",
+      description: "NFA accepting all strings over {a,b}. Every path through a and b leads to acceptance.",
+      states: [
+        { name: "q0", isStart: true, isAccept: true },
+      ],
+      transitions: [
+        { from: "q0", on: "a", to: "q0" },
+        { from: "q0", on: "b", to: "q0" },
+      ],
+    },
+  },
+];
+
+type MachineColor = { badge: string; text: string; border: string; glow: string };
+const MACHINE_COLORS: Record<string, MachineColor> = {
+  DFA: { badge: "border-primary/60 text-primary bg-primary/10", text: "text-primary", border: "border-primary/40", glow: "shadow-[0_0_15px_rgba(255,0,255,0.2)]" },
+  NFA: { badge: "border-secondary/60 text-secondary bg-secondary/10", text: "text-secondary", border: "border-secondary/40", glow: "shadow-[0_0_15px_rgba(34,211,238,0.2)]" },
+  TM: { badge: "border-chart-4/60 text-chart-4 bg-chart-4/10", text: "text-chart-4", border: "border-chart-4/40", glow: "shadow-[0_0_15px_rgba(0,255,0,0.2)]" },
+};
+
+export default function RegexBuilder() {
+  const [puzzleIdx, setPuzzleIdx] = useState(0);
+  const [input, setInput] = useState("");
+  const [solved, setSolved] = useState(false);
+  const [showHint, setShowHint] = useState(false);
+  const [score, setScore] = useState(0);
+  const [solvedCount, setSolvedCount] = useState(0);
+  const [finished, setFinished] = useState(false);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  const puzzle = PUZZLES[puzzleIdx]!;
+  const mc = MACHINE_COLORS[puzzle.machine.type]!;
+
+  const accepted = puzzle.regex.test(input);
+  const rejected = input.length > 0 && !accepted;
+
+  useEffect(() => {
+    if (accepted && !solved) {
+      setSolved(true);
+      setScore((s) => s + Math.max(5, 20 - input.length));
+      setSolvedCount((c) => c + 1);
+    }
+  }, [accepted, solved, input]);
+
+  useEffect(() => {
+    setSolved(false);
+    setInput("");
+    setShowHint(false);
+    setTimeout(() => inputRef.current?.focus(), 100);
+  }, [puzzleIdx]);
+
+  const handleNext = () => {
+    if (puzzleIdx + 1 >= PUZZLES.length) {
+      setFinished(true);
+    } else {
+      setPuzzleIdx((i) => i + 1);
+    }
+  };
+
+  const handleReset = () => {
+    setPuzzleIdx(0);
+    setInput("");
+    setSolved(false);
+    setShowHint(false);
+    setScore(0);
+    setSolvedCount(0);
+    setFinished(false);
+  };
+
+  if (finished) {
+    return (
+      <div className="min-h-[100dvh] w-full bg-background text-foreground flex items-center justify-center relative">
+        <div className="absolute inset-0 pointer-events-none opacity-[0.03]" style={{ backgroundImage: "radial-gradient(circle at center, white 1px, transparent 1px)", backgroundSize: "24px 24px" }} />
+        <Card className="max-w-md w-full border-2 border-accent/40 bg-card/90 backdrop-blur-md text-center mx-6">
+          <CardHeader>
+            <div className="flex justify-center mb-2"><Trophy className="w-10 h-10 text-accent" /></div>
+            <CardTitle className="text-3xl uppercase tracking-tighter">All Puzzles Solved</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="text-5xl font-extrabold text-accent">{score} pts</div>
+            <div className="text-sm text-muted-foreground">{solvedCount} / {PUZZLES.length} machines fed a valid string</div>
+            <Button onClick={handleReset} className="gap-2 rounded-2xl font-bold uppercase tracking-widest" size="lg">
+              <Code2 className="w-4 h-4" /> Play Again
+            </Button>
+            <div className="pt-2">
+              <Link href="/" className="text-sm text-muted-foreground hover:text-foreground underline">Back to Arcade</Link>
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+
+  return (
+    <div className="min-h-[100dvh] w-full bg-background text-foreground overflow-hidden relative">
+      <div className="absolute inset-0 pointer-events-none opacity-[0.03] z-0" style={{ backgroundImage: "radial-gradient(circle at center, white 1px, transparent 1px)", backgroundSize: "24px 24px" }} />
+
+      <div className="max-w-5xl mx-auto px-6 py-6 relative z-10">
+        <div className="flex items-center justify-between mb-6 flex-wrap gap-3">
+          <Link href="/" className="inline-flex items-center gap-2 text-accent hover:text-accent/80 uppercase tracking-widest text-sm font-bold">
+            <ArrowLeft className="w-4 h-4" /> Back to Arcade
+          </Link>
+          <div className="flex items-center gap-2 flex-wrap">
+            <Badge variant="outline" className="px-3 py-1.5">Puzzle {puzzleIdx + 1} / {PUZZLES.length}</Badge>
+            <Badge variant="outline" className="bg-accent/10 border-accent/40 text-accent px-3 py-1.5 font-bold">{score} pts</Badge>
+          </div>
+        </div>
+
+        <div className="text-center mb-6">
+          <div className="inline-flex items-center justify-center p-2 mb-3 rounded-full bg-accent/10 text-accent border border-accent/30 shadow-[0_0_20px_rgba(255,255,0,0.15)]">
+            <Code2 className="w-6 h-6" />
+          </div>
+          <h1 className="text-4xl font-extrabold tracking-tighter uppercase">
+            Regex <span className="text-transparent bg-clip-text bg-gradient-to-r from-accent to-accent/50">Builder</span>
+          </h1>
+          <p className="text-sm text-muted-foreground mt-1">Feed the machine a string it will accept.</p>
+        </div>
+
+        <div className="grid lg:grid-cols-[1fr_340px] gap-6">
+          {/* Main column */}
+          <div className="space-y-5">
+            {/* Regex + challenge */}
+            <Card className={`border-2 ${mc.border} bg-card/80 backdrop-blur-md ${mc.glow}`}>
+              <CardContent className="p-6">
+                <div className="flex items-center gap-3 mb-4">
+                  <Badge variant="outline" className={`text-xs uppercase tracking-widest font-bold ${mc.badge}`}>
+                    {puzzle.machine.type}
+                  </Badge>
+                  <span className="text-sm text-muted-foreground font-medium">{puzzle.title}</span>
+                </div>
+
+                {/* Regex display */}
+                <div className="flex items-center justify-center py-5 mb-4 bg-black/40 rounded-xl border border-border">
+                  <span className="text-muted-foreground font-mono text-2xl mr-1">/</span>
+                  <span className={`font-mono text-3xl font-black tracking-wider ${mc.text}`}>{puzzle.regexDisplay}</span>
+                  <span className="text-muted-foreground font-mono text-2xl ml-1">/</span>
+                </div>
+
+                <p className="text-sm text-foreground/80 mb-2">{puzzle.challenge}</p>
+
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="text-xs text-muted-foreground uppercase tracking-widest">Rejects:</span>
+                  {puzzle.sampleRejects.map((r, i) => (
+                    <span key={i} className="font-mono text-xs bg-red-500/10 border border-red-500/30 text-red-400 px-2 py-0.5 rounded">
+                      {r === "" ? "ε" : `"${r}"`}
+                    </span>
+                  ))}
+                </div>
+              </CardContent>
+            </Card>
+
+            {/* Input area */}
+            <Card className="border border-border bg-card/80 backdrop-blur-md">
+              <CardHeader className="pb-3">
+                <CardTitle className="text-sm uppercase tracking-widest text-muted-foreground">Your String</CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className={`flex items-center gap-3 bg-black/50 p-4 rounded-xl border-2 transition-all ${
+                  accepted ? "border-green-500 shadow-[0_0_15px_rgba(34,197,94,0.3)]"
+                    : rejected ? "border-red-500/60"
+                      : "border-border"
+                }`}>
+                  <span className="text-muted-foreground font-mono text-xl">"</span>
+                  <Input
+                    ref={inputRef}
+                    value={input}
+                    onChange={(e) => { if (!solved) setInput(e.target.value); }}
+                    className={`font-mono text-2xl bg-transparent border-none focus-visible:ring-0 px-0 shadow-none ${
+                      accepted ? "text-green-400" : rejected ? "text-red-400" : "text-foreground"
+                    }`}
+                    placeholder="type here..."
+                    disabled={solved}
+                    autoFocus
+                  />
+                  <span className="text-muted-foreground font-mono text-xl">"</span>
+                  <div className="flex-shrink-0">
+                    {accepted && <Check className="w-6 h-6 text-green-400" />}
+                    {rejected && <X className="w-6 h-6 text-red-400" />}
+                  </div>
+                </div>
+
+                {/* Character-by-character tape */}
+                {input.length > 0 && (
+                  <div className="flex gap-1.5 flex-wrap">
+                    {input.split("").map((ch, i) => (
+                      <div
+                        key={i}
+                        className={`w-9 h-10 flex items-center justify-center border rounded font-mono text-sm font-bold transition-all ${
+                          accepted
+                            ? "border-green-500/60 bg-green-500/10 text-green-400"
+                            : "border-border/60 bg-black/30 text-foreground"
+                        }`}
+                      >
+                        {ch}
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                <div className="flex items-center gap-2 flex-wrap">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => setShowHint((h) => !h)}
+                    className="gap-1.5 text-xs"
+                  >
+                    <Lightbulb className="w-3.5 h-3.5" />
+                    {showHint ? "Hide hint" : "Show hint"}
+                  </Button>
+                  <AnimatePresence>
+                    {showHint && (
+                      <motion.span
+                        initial={{ opacity: 0, x: -4 }}
+                        animate={{ opacity: 1, x: 0 }}
+                        exit={{ opacity: 0 }}
+                        className="text-xs text-accent font-mono"
+                      >
+                        {puzzle.hint}
+                      </motion.span>
+                    )}
+                  </AnimatePresence>
+                </div>
+
+                <AnimatePresence>
+                  {accepted && (
+                    <motion.div
+                      initial={{ opacity: 0, y: 6 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      className="p-4 rounded-xl border-2 border-green-500/60 bg-green-500/10 flex items-center justify-between gap-4"
+                    >
+                      <div>
+                        <div className="text-green-400 font-bold text-sm uppercase tracking-wide mb-0.5">Accepted</div>
+                        <div className="text-xs text-foreground/70">
+                          "{input}" matches <span className="font-mono text-accent">/{puzzle.regexDisplay}/</span> and is accepted by the {puzzle.machine.type}.
+                        </div>
+                      </div>
+                      <Button
+                        onClick={handleNext}
+                        className="gap-1.5 rounded-xl bg-green-600 hover:bg-green-500 text-white font-bold flex-shrink-0"
+                        size="sm"
+                      >
+                        {puzzleIdx + 1 >= PUZZLES.length ? "Finish" : "Next"} <ChevronRight className="w-4 h-4" />
+                      </Button>
+                    </motion.div>
+                  )}
+                </AnimatePresence>
+              </CardContent>
+            </Card>
+          </div>
+
+          {/* Side: machine details */}
+          <div className="space-y-4">
+            <Card className={`border ${mc.border} bg-card/80 backdrop-blur-md`}>
+              <CardHeader className="py-3 border-b border-border">
+                <CardTitle className="text-xs uppercase tracking-widest text-muted-foreground">Machine Info</CardTitle>
+              </CardHeader>
+              <CardContent className="p-4 text-sm text-foreground/80 leading-relaxed">
+                {puzzle.machine.description}
+              </CardContent>
+            </Card>
+
+            <Card className={`border ${mc.border} bg-card/80 backdrop-blur-md`}>
+              <CardHeader className="py-3 border-b border-border">
+                <CardTitle className="text-xs uppercase tracking-widest text-muted-foreground">States</CardTitle>
+              </CardHeader>
+              <CardContent className="p-4">
+                <div className="flex flex-wrap gap-2">
+                  {puzzle.machine.states.map((s) => (
+                    <div
+                      key={s.name}
+                      className={`relative flex items-center justify-center px-3 py-1.5 rounded-full border-2 font-mono text-sm font-bold ${
+                        s.isAccept ? `${mc.border} ${mc.text} shadow-sm` : "border-border text-foreground"
+                      }`}
+                    >
+                      {s.isStart && <span className="absolute -left-5 text-xs text-muted-foreground font-mono">→</span>}
+                      {s.isAccept ? `(${s.name})` : s.name}
+                    </div>
+                  ))}
+                </div>
+              </CardContent>
+            </Card>
+
+            <Card className={`border ${mc.border} bg-card/80 backdrop-blur-md`}>
+              <CardHeader className="py-3 border-b border-border">
+                <CardTitle className="text-xs uppercase tracking-widest text-muted-foreground">Transition Table δ</CardTitle>
+              </CardHeader>
+              <CardContent className="p-0">
+                <div className="overflow-auto max-h-64">
+                  <table className="w-full text-xs font-mono">
+                    <thead className="bg-muted/20 sticky top-0">
+                      <tr>
+                        <th className="p-2 text-left text-muted-foreground border-b border-border">From</th>
+                        <th className="p-2 text-left text-muted-foreground border-b border-border">On</th>
+                        <th className="p-2 text-left text-muted-foreground border-b border-border">To</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {puzzle.machine.transitions.map((t, i) => (
+                        <tr key={i} className="border-b border-border/40 hover:bg-accent/5">
+                          <td className="p-2 text-foreground">{t.from}</td>
+                          <td className={`p-2 ${mc.text}`}>{t.on}</td>
+                          <td className="p-2 text-accent">
+                            {Array.isArray(t.to) ? `{${t.to.join(", ")}}` : t.to}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </CardContent>
+            </Card>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
