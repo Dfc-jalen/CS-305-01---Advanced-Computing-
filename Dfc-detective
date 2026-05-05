@@ -1,0 +1,554 @@
+import React, { useState, useEffect, useMemo } from "react";
+import { Link } from "wouter";
+import { motion, AnimatePresence } from "framer-motion";
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
+import { Progress } from "@/components/ui/progress";
+import { Play, RotateCcw, ArrowLeft, Check, X, Search, Trophy, Timer } from "lucide-react";
+
+// --- Types & Data ---
+
+type DFA = {
+  id: string;
+  title: string;
+  alphabet: string[];
+  start: string;
+  accept: string[];
+  transitions: Record<string, Record<string, string>>;
+  states: Record<string, { x: number; y: number; label: string }>;
+  description: string;
+  candidateStrings: string[];
+};
+
+const LEVELS: DFA[] = [
+  {
+    id: "l1",
+    title: "Strings ending in 01",
+    alphabet: ["0", "1"],
+    start: "q0",
+    accept: ["q2"],
+    transitions: {
+      q0: { "0": "q1", "1": "q0" },
+      q1: { "0": "q1", "1": "q2" },
+      q2: { "0": "q1", "1": "q0" },
+    },
+    states: {
+      q0: { x: 90, y: 120, label: "q0" },
+      q1: { x: 280, y: 120, label: "q1" },
+      q2: { x: 470, y: 120, label: "q2" },
+    },
+    description: "Accepts any binary string that ends with the sequence '01'.",
+    candidateStrings: ["01", "101", "100", "1101", "111"],
+  },
+  {
+    id: "l2",
+    title: "Even number of 0s",
+    alphabet: ["0", "1"],
+    start: "q0",
+    accept: ["q0"],
+    transitions: {
+      q0: { "0": "q1", "1": "q0" },
+      q1: { "0": "q0", "1": "q1" },
+    },
+    states: {
+      q0: { x: 150, y: 120, label: "q0" },
+      q1: { x: 400, y: 120, label: "q1" },
+    },
+    description: "Accepts binary strings containing an even number of '0's.",
+    candidateStrings: ["00", "1010", "0", "111", "000"],
+  },
+  {
+    id: "l3",
+    title: "Contains '101'",
+    alphabet: ["0", "1"],
+    start: "q0",
+    accept: ["q3"],
+    transitions: {
+      q0: { "0": "q0", "1": "q1" },
+      q1: { "0": "q2", "1": "q1" },
+      q2: { "0": "q0", "1": "q3" },
+      q3: { "0": "q3", "1": "q3" },
+    },
+    states: {
+      q0: { x: 60, y: 120, label: "q0" },
+      q1: { x: 200, y: 120, label: "q1" },
+      q2: { x: 340, y: 120, label: "q2" },
+      q3: { x: 480, y: 120, label: "q3" },
+    },
+    description: "Accepts binary strings that contain the substring '101'.",
+    candidateStrings: ["101", "01010", "111", "1001", "010"],
+  },
+  {
+    id: "l4",
+    title: "Length divisible by 3",
+    alphabet: ["0", "1"],
+    start: "q0",
+    accept: ["q0"],
+    transitions: {
+      q0: { "0": "q1", "1": "q1" },
+      q1: { "0": "q2", "1": "q2" },
+      q2: { "0": "q0", "1": "q0" },
+    },
+    states: {
+      q0: { x: 270, y: 50, label: "q0" },
+      q1: { x: 120, y: 180, label: "q1" },
+      q2: { x: 420, y: 180, label: "q2" },
+    },
+    description: "Accepts strings whose total length is a multiple of 3.",
+    candidateStrings: ["000", "10", "101010", "", "1111"],
+  },
+  {
+    id: "l5",
+    title: "Binary divisible by 3",
+    alphabet: ["0", "1"],
+    start: "q0",
+    accept: ["q0"],
+    transitions: {
+      q0: { "0": "q0", "1": "q1" },
+      q1: { "0": "q2", "1": "q0" },
+      q2: { "0": "q1", "1": "q2" },
+    },
+    states: {
+      q0: { x: 270, y: 50, label: "q0" },
+      q1: { x: 120, y: 180, label: "q1" },
+      q2: { x: 420, y: 180, label: "q2" },
+    },
+    description: "Accepts binary numbers (read left-to-right) that are multiples of 3.",
+    candidateStrings: ["0", "11", "110", "10", "1001"],
+  }
+];
+
+function simulateDFA(dfa: DFA, input: string) {
+  let current = dfa.start;
+  const path = [current];
+
+  for (const ch of input) {
+    if (!dfa.alphabet.includes(ch)) {
+      return { accepted: false, path, error: `Invalid symbol: ${ch}` };
+    }
+    current = dfa.transitions[current][ch];
+    path.push(current);
+  }
+
+  return {
+    accepted: dfa.accept.includes(current),
+    path,
+    error: null,
+  };
+}
+
+// --- Components ---
+
+function StateNode({ state, isActive, isAccept, isStart }: any) {
+  return (
+    <motion.div
+      className={`absolute flex h-[60px] w-[60px] items-center justify-center rounded-full border-4 text-base font-bold shadow-[0_0_15px_rgba(0,0,0,0.5)] ${
+        isActive ? "border-primary bg-primary/20 text-primary" : "border-muted-foreground bg-card text-foreground"
+      }`}
+      style={{ left: state.x - 30, top: state.y - 30 }}
+      animate={{ 
+        scale: isActive ? 1.2 : 1,
+        boxShadow: isActive ? "0 0 25px var(--color-primary)" : "0 0 5px rgba(0,0,0,0.5)"
+      }}
+      transition={{ duration: 0.3 }}
+    >
+      <div className="relative flex h-full w-full items-center justify-center rounded-full">
+        {isAccept && <div className={`absolute inset-[3px] rounded-full border-[2px] ${isActive ? "border-primary" : "border-muted-foreground"}`} />}
+        <span>{state.label}</span>
+        {isStart && (
+          <span className="absolute -left-12 text-xs font-medium text-muted-foreground uppercase tracking-wider">start</span>
+        )}
+      </div>
+    </motion.div>
+  );
+}
+
+function Arrow({ x1, y1, x2, y2, label }: any) {
+  const dx = x2 - x1;
+  const dy = y2 - y1;
+  const angle = Math.atan2(dy, dx) * (180 / Math.PI);
+  const length = Math.sqrt(dx * dx + dy * dy) - 60; // offset for node radius
+  
+  // Add a slight curve or offset if bidirectional
+  const midX = x1 + dx/2;
+  const midY = y1 + dy/2;
+
+  return (
+    <div
+      className="absolute"
+      style={{ 
+        left: x1 + 30 * Math.cos(Math.atan2(dy, dx)), 
+        top: y1 + 30 * Math.sin(Math.atan2(dy, dx)), 
+        width: length, 
+        transform: `rotate(${angle}deg)`, 
+        transformOrigin: "left center" 
+      }}
+    >
+      <div className="relative h-[2px] bg-muted-foreground/50">
+        <div 
+          className="absolute left-1/2 -translate-x-1/2 -translate-y-1/2 rounded bg-background px-1.5 py-0.5 text-xs font-mono text-foreground border border-border"
+          style={{ transform: `translate(-50%, -50%) rotate(${-angle}deg)` }}
+        >
+          {label}
+        </div>
+        <div className="absolute -right-1 -top-[5px] h-0 w-0 border-b-[6px] border-l-[10px] border-t-[6px] border-b-transparent border-l-muted-foreground/50 border-t-transparent" />
+      </div>
+    </div>
+  );
+}
+
+export default function DFADetective() {
+  const [levelIndex, setLevelIndex] = useState(0);
+  const [score, setScore] = useState(0);
+  const [timeLeft, setTimeLeft] = useState(60);
+  const [gameState, setGameState] = useState<"playing" | "animating" | "level_complete" | "game_over">("playing");
+  
+  const level = LEVELS[levelIndex];
+  
+  const [answers, setAnswers] = useState<Record<string, boolean>>({});
+  const [currentStringIndex, setCurrentStringIndex] = useState(0);
+  
+  // Animation state
+  const [simulatingString, setSimulatingString] = useState("");
+  const [stepIndex, setStepIndex] = useState(0);
+  const [activeState, setActiveState] = useState(level?.start);
+  const [simulationResult, setSimulationResult] = useState<any>(null);
+
+  // Timer
+  useEffect(() => {
+    if (gameState !== "playing") return;
+    if (timeLeft <= 0) {
+      setGameState("game_over");
+      return;
+    }
+    const t = setInterval(() => setTimeLeft(l => l - 1), 1000);
+    return () => clearInterval(t);
+  }, [timeLeft, gameState]);
+
+  // Simulation animation
+  useEffect(() => {
+    if (gameState !== "animating" || !simulationResult) return;
+    
+    if (stepIndex >= simulationResult.path.length - 1) {
+      setTimeout(() => {
+        if (currentStringIndex < level.candidateStrings.length - 1) {
+          setCurrentStringIndex(i => i + 1);
+          setGameState("playing");
+        } else {
+          setGameState("level_complete");
+        }
+      }, 1500);
+      return;
+    }
+
+    const t = setTimeout(() => {
+      setStepIndex(s => s + 1);
+      setActiveState(simulationResult.path[stepIndex + 1]);
+    }, 700);
+    return () => clearTimeout(t);
+  }, [gameState, stepIndex, simulationResult, currentStringIndex, level]);
+
+  if (!level && gameState !== "game_over") {
+    return <div>Loading...</div>;
+  }
+
+  const handleAnswer = (answer: boolean) => {
+    const currentString = level.candidateStrings[currentStringIndex];
+    const result = simulateDFA(level, currentString);
+    const isCorrect = result.accepted === answer;
+    
+    if (isCorrect) {
+      setScore(s => s + 100 + timeLeft);
+    } else {
+      setScore(s => Math.max(0, s - 50));
+    }
+    
+    setAnswers(prev => ({ ...prev, [currentString]: answer }));
+    setSimulatingString(currentString);
+    setSimulationResult(result);
+    setStepIndex(0);
+    setActiveState(level.start);
+    setGameState("animating");
+  };
+
+  const handleNextLevel = () => {
+    if (levelIndex < LEVELS.length - 1) {
+      setLevelIndex(i => i + 1);
+      setGameState("playing");
+      setAnswers({});
+      setCurrentStringIndex(0);
+      setTimeLeft(60);
+    } else {
+      setGameState("game_over");
+    }
+  };
+
+  const handleRestart = () => {
+    setLevelIndex(0);
+    setScore(0);
+    setTimeLeft(60);
+    setGameState("playing");
+    setAnswers({});
+    setCurrentStringIndex(0);
+  };
+
+  // Rough arrow generation logic for viz
+  const generateArrows = () => {
+    const arrows: any[] = [];
+    const addedPairs = new Set<string>();
+
+    Object.entries(level.transitions).forEach(([fromState, trans]) => {
+      Object.entries(trans).forEach(([sym, toState]) => {
+        const key = `${fromState}-${toState}`;
+        const existing = arrows.find(a => a.key === key);
+        if (existing) {
+          existing.label += `,${sym}`;
+        } else {
+          const from = level.states[fromState];
+          const to = level.states[toState];
+          if (fromState === toState) {
+            // self loop
+            arrows.push({
+              key,
+              x1: from.x, y1: from.y - 20, x2: from.x + 20, y2: from.y - 20, // very simplified
+              label: sym,
+              isSelf: true,
+              x: from.x, y: from.y
+            });
+          } else {
+            arrows.push({
+              key,
+              x1: from.x, y1: from.y, x2: to.x, y2: to.y,
+              label: sym,
+              isSelf: false
+            });
+          }
+        }
+      });
+    });
+    return arrows;
+  };
+
+  return (
+    <div className="min-h-[100dvh] w-full bg-background text-foreground overflow-hidden relative font-sans">
+      <div className="absolute inset-0 pointer-events-none opacity-[0.03] z-0" 
+           style={{ backgroundImage: 'radial-gradient(circle at center, white 1px, transparent 1px)', backgroundSize: '24px 24px' }} />
+      
+      <div className="max-w-6xl mx-auto px-6 py-6 relative z-10 flex flex-col h-full">
+        
+        {/* Header */}
+        <header className="flex items-center justify-between mb-8">
+          <Link href="/" className="flex items-center gap-2 text-primary hover:text-primary/80 transition-colors uppercase tracking-widest text-sm font-bold">
+            <ArrowLeft className="w-4 h-4" /> Back to Arcade
+          </Link>
+          <div className="flex items-center gap-6">
+            <div className="flex items-center gap-2 bg-card/50 px-4 py-2 rounded-full border border-border backdrop-blur-sm">
+              <Timer className={`w-4 h-4 ${timeLeft < 10 ? 'text-destructive animate-pulse' : 'text-muted-foreground'}`} />
+              <span className={`font-mono font-bold ${timeLeft < 10 ? 'text-destructive' : ''}`}>{timeLeft}s</span>
+            </div>
+            <div className="flex items-center gap-2 bg-card/50 px-4 py-2 rounded-full border border-primary/30 backdrop-blur-sm shadow-[0_0_10px_rgba(255,0,255,0.1)]">
+              <Trophy className="w-4 h-4 text-primary" />
+              <span className="font-mono font-bold text-primary">{score} pts</span>
+            </div>
+          </div>
+        </header>
+
+        <div className="text-center mb-8">
+          <div className="inline-flex items-center justify-center p-2 mb-4 rounded-full bg-primary/10 text-primary border border-primary/30">
+            <Search className="w-6 h-6" />
+          </div>
+          <h1 className="text-4xl font-extrabold tracking-tighter uppercase drop-shadow-[0_0_10px_rgba(255,255,255,0.1)]">
+            DFA <span className="text-transparent bg-clip-text bg-gradient-to-r from-primary to-primary/50">Detective</span>
+          </h1>
+        </div>
+
+        {gameState === "game_over" ? (
+          <motion.div 
+            initial={{ scale: 0.9, opacity: 0 }}
+            animate={{ scale: 1, opacity: 1 }}
+            className="flex-1 flex items-center justify-center"
+          >
+            <Card className="w-full max-w-md border-primary/50 shadow-[0_0_30px_rgba(255,0,255,0.2)] bg-card/80 backdrop-blur-md">
+              <CardHeader className="text-center">
+                <CardTitle className="text-3xl uppercase tracking-wider mb-2 text-primary">Game Over</CardTitle>
+                <CardDescription className="text-lg">Detective Report</CardDescription>
+              </CardHeader>
+              <CardContent className="flex flex-col items-center gap-6">
+                <div className="text-6xl font-black font-mono text-transparent bg-clip-text bg-gradient-to-br from-white to-white/50 drop-shadow-[0_0_10px_rgba(255,255,255,0.3)]">
+                  {score}
+                </div>
+                <p className="text-muted-foreground uppercase tracking-widest text-sm">Total Score</p>
+                <Button size="lg" className="w-full mt-4 uppercase tracking-widest font-bold" onClick={handleRestart}>
+                  <RotateCcw className="mr-2 h-5 w-5" /> Play Again
+                </Button>
+              </CardContent>
+            </Card>
+          </motion.div>
+        ) : (
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 flex-1">
+            
+            {/* Left Panel: Concept & Level Info */}
+            <div className="space-y-6">
+              <Card className="border-border bg-card/80 backdrop-blur-md">
+                <CardHeader>
+                  <div className="flex justify-between items-center mb-2">
+                    <Badge variant="outline" className="uppercase tracking-widest">Level {levelIndex + 1}/{LEVELS.length}</Badge>
+                  </div>
+                  <CardTitle className="text-xl text-primary">{level.title}</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <p className="text-sm text-muted-foreground mb-4">
+                    {level.description}
+                  </p>
+                  <div className="space-y-2 text-sm">
+                    <div className="flex justify-between">
+                      <span className="text-muted-foreground">Alphabet (Σ):</span>
+                      <span className="font-mono bg-muted px-2 py-0.5 rounded text-xs">{`{${level.alphabet.join(", ")}}`}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-muted-foreground">Start State:</span>
+                      <span className="font-mono bg-muted px-2 py-0.5 rounded text-xs">{level.start}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-muted-foreground">Accept States:</span>
+                      <span className="font-mono bg-muted px-2 py-0.5 rounded text-xs">{`{${level.accept.join(", ")}}`}</span>
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+
+              <Card className="border-primary/20 bg-card/80 backdrop-blur-md shadow-[0_0_15px_rgba(255,0,255,0.05)]">
+                <CardHeader>
+                  <CardTitle className="text-lg">String Database</CardTitle>
+                  <CardDescription>Classify these strings</CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <div className="space-y-2">
+                    {level.candidateStrings.map((str, idx) => (
+                      <div 
+                        key={idx} 
+                        className={`flex items-center justify-between p-3 rounded-lg border ${
+                          idx === currentStringIndex && gameState === "playing" 
+                            ? "border-primary bg-primary/10 shadow-[0_0_10px_rgba(255,0,255,0.2)]" 
+                            : idx < currentStringIndex 
+                              ? "border-muted bg-muted/50" 
+                              : "border-transparent bg-muted/20"
+                        }`}
+                      >
+                        <span className="font-mono font-bold">{str === "" ? "ε (empty)" : str}</span>
+                        {answers[str] !== undefined ? (
+                          answers[str] === simulateDFA(level, str).accepted ? (
+                            <Check className="text-green-500 w-5 h-5" />
+                          ) : (
+                            <X className="text-red-500 w-5 h-5" />
+                          )
+                        ) : idx === currentStringIndex && gameState === "playing" ? (
+                          <div className="flex gap-2">
+                            <Button size="sm" variant="outline" className="h-7 text-xs border-green-500/50 hover:bg-green-500/20 hover:text-green-400" onClick={() => handleAnswer(true)}>Accept</Button>
+                            <Button size="sm" variant="outline" className="h-7 text-xs border-red-500/50 hover:bg-red-500/20 hover:text-red-400" onClick={() => handleAnswer(false)}>Reject</Button>
+                          </div>
+                        ) : (
+                          <span className="text-xs text-muted-foreground uppercase tracking-wider">Pending</span>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </CardContent>
+              </Card>
+            </div>
+
+            {/* Right Panel: DFA Visualization & Animation */}
+            <div className="lg:col-span-2 space-y-6 flex flex-col">
+              <Card className="border-border bg-card/80 backdrop-blur-md flex-1 flex flex-col overflow-hidden relative">
+                <CardHeader className="pb-2">
+                  <div className="flex justify-between items-center">
+                    <CardTitle className="text-lg">State Machine Simulator</CardTitle>
+                    {gameState === "animating" && (
+                      <Badge variant="secondary" className="animate-pulse bg-primary/20 text-primary border-primary/50">
+                        Simulating...
+                      </Badge>
+                    )}
+                  </div>
+                </CardHeader>
+                <CardContent className="flex-1 min-h-[350px] relative flex flex-col">
+                  
+                  {gameState === "animating" && (
+                    <div className="mb-4 p-3 bg-muted/30 border border-border rounded-lg flex items-center gap-4">
+                      <div className="text-sm font-medium text-muted-foreground w-16">Input:</div>
+                      <div className="flex gap-1 overflow-x-auto">
+                        {simulatingString.split("").map((char, idx) => (
+                          <motion.div
+                            key={idx}
+                            animate={{
+                              scale: idx === stepIndex ? 1.2 : 1,
+                              y: idx === stepIndex ? -4 : 0,
+                              color: idx === stepIndex ? "var(--color-primary)" : idx < stepIndex ? "var(--color-muted-foreground)" : "var(--color-foreground)"
+                            }}
+                            className={`w-8 h-8 flex items-center justify-center rounded-md font-mono font-bold text-lg ${
+                              idx === stepIndex ? "bg-primary/20 border border-primary/50" : "bg-background border border-border"
+                            }`}
+                          >
+                            {char}
+                          </motion.div>
+                        ))}
+                        {simulatingString === "" && (
+                          <div className="w-8 h-8 flex items-center justify-center rounded-md font-mono bg-background border border-border">ε</div>
+                        )}
+                      </div>
+                    </div>
+                  )}
+
+                  <div className="flex-1 relative rounded-xl border border-border bg-black/50 overflow-hidden flex items-center justify-center">
+                    <div className="relative w-full max-w-[600px] h-full max-h-[300px]">
+                      {/* Very basic diagram rendering */}
+                      {generateArrows().map((a, i) => (
+                        a.isSelf ? (
+                          <div key={i} className="absolute w-12 h-12 border-[2px] border-muted-foreground/50 rounded-full" style={{ left: a.x - 6, top: a.y - 40 }}>
+                            <div className="absolute -top-3 left-1/2 -translate-x-1/2 bg-background px-1 text-xs font-mono border border-border rounded text-foreground">{a.label}</div>
+                            <div className="absolute bottom-[2px] -right-[3px] w-0 h-0 border-t-[5px] border-l-[8px] border-b-[5px] border-t-transparent border-l-muted-foreground/50 border-b-transparent rotate-[110deg]" />
+                          </div>
+                        ) : (
+                          <Arrow key={i} x1={a.x1} y1={a.y1} x2={a.x2} y2={a.y2} label={a.label} />
+                        )
+                      ))}
+                      
+                      {Object.entries(level.states).map(([id, state]) => (
+                        <StateNode
+                          key={id}
+                          state={state}
+                          isActive={activeState === id}
+                          isAccept={level.accept.includes(id)}
+                          isStart={level.start === id}
+                        />
+                      ))}
+                    </div>
+                  </div>
+
+                  <AnimatePresence>
+                    {gameState === "level_complete" && (
+                      <motion.div
+                        initial={{ opacity: 0, y: 20 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        className="absolute inset-0 bg-background/80 backdrop-blur-sm flex flex-col items-center justify-center z-20 rounded-xl"
+                      >
+                        <Trophy className="w-16 h-16 text-primary mb-4" />
+                        <h2 className="text-3xl font-black uppercase tracking-tighter mb-6 text-transparent bg-clip-text bg-gradient-to-r from-primary to-primary/50">
+                          Level Clear
+                        </h2>
+                        <Button size="lg" className="uppercase tracking-widest font-bold px-8 shadow-[0_0_20px_rgba(255,0,255,0.4)]" onClick={handleNextLevel}>
+                          Next Level <ArrowLeft className="w-5 h-5 ml-2 rotate-180" />
+                        </Button>
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
+
+                </CardContent>
+              </Card>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
