@@ -1,0 +1,635 @@
+import { useState, useMemo, useEffect, useRef, useCallback } from "react";
+import { Link } from "wouter";
+import { motion, AnimatePresence } from "framer-motion";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
+import { ArrowLeft, Brain, RotateCcw, Trophy, Sparkles, Play, ChevronLeft, ChevronRight } from "lucide-react";
+
+import brain0 from "@/assets/brain-0.png";
+import brain1 from "@/assets/brain-1.png";
+import brain2 from "@/assets/brain-2.png";
+import brain3 from "@/assets/brain-3.png";
+import brain4 from "@/assets/brain-4.png";
+import brain5 from "@/assets/brain-5.png";
+import brain6 from "@/assets/brain-6.png";
+import brain7 from "@/assets/brain-7.png";
+
+type Stage = {
+  img: string;
+  name: string;
+  tag: string;
+  glow: string;
+};
+
+const STAGES: Stage[] = [
+  { img: brain0, name: "Sentient Rock", tag: "Bottom of the chain", glow: "drop-shadow-[0_0_25px_rgba(120,113,108,0.8)]" },
+  { img: brain1, name: "Pink Starfish", tag: "Lights are on, nobody home", glow: "drop-shadow-[0_0_25px_rgba(244,114,182,0.9)]" },
+  { img: brain2, name: "Confused Caveman", tag: "Discovers fire weekly", glow: "drop-shadow-[0_0_25px_rgba(217,119,6,0.9)]" },
+  { img: brain3, name: "Average Joe", tag: "Knows what a vowel is", glow: "drop-shadow-[0_0_25px_rgba(148,163,184,0.9)]" },
+  { img: brain4, name: "Honor Student", tag: "Reads the textbook", glow: "drop-shadow-[0_0_25px_rgba(34,197,94,0.9)]" },
+  { img: brain5, name: "Professor", tag: "Has tenure", glow: "drop-shadow-[0_0_25px_rgba(59,130,246,0.9)]" },
+  { img: brain6, name: "Einstein-tier", tag: "Speaks in proofs", glow: "drop-shadow-[0_0_30px_rgba(234,179,8,1)]" },
+  { img: brain7, name: "Galaxy Brain", tag: "One with the automata", glow: "drop-shadow-[0_0_40px_rgba(168,85,247,1)]" },
+];
+
+const START_STAGE = 1;
+
+type Question = {
+  prompt: string;
+  options: { text: string; correct: boolean; why: string }[];
+};
+
+const QUESTIONS: Question[] = [
+  {
+    prompt: "What does NFA stand for?",
+    options: [
+      { text: "Non-deterministic Finite Automaton", correct: true, why: "An NFA can have multiple possible next states for the same input symbol." },
+      { text: "Naturally Friendly Algorithm", correct: false, why: "NFAs are formal machines, not algorithms." },
+    ],
+  },
+  {
+    prompt: "Something an NFA can do that a DFA cannot:",
+    options: [
+      { text: "Multiple transitions on the same symbol", correct: true, why: "Nondeterminism: more than one transition can be enabled on a symbol, plus ε-moves." },
+      { text: "Loop back to the start state", correct: false, why: "DFAs can absolutely loop back to the start." },
+    ],
+  },
+  {
+    prompt: "An ε (epsilon) transition lets the machine…",
+    options: [
+      { text: "Move states without consuming input", correct: true, why: "ε-transitions are silent, free moves between states." },
+      { text: "Read the empty string and reject", correct: false, why: "ε is a free move, not a rejection." },
+    ],
+  },
+  {
+    prompt: "An NFA accepts a string when…",
+    options: [
+      { text: "At least one path ends in an accept state", correct: true, why: "Acceptance is existential — any single accepting branch is enough." },
+      { text: "Every path ends in an accept state", correct: false, why: "That would be universal acceptance, which is not how NFAs work." },
+    ],
+  },
+  {
+    prompt: "Are NFAs more powerful than DFAs?",
+    options: [
+      { text: "No, they recognize the same languages", correct: true, why: "Subset construction converts any NFA to an equivalent DFA." },
+      { text: "Yes, NFAs handle context-free languages", correct: false, why: "Context-free languages need a pushdown automaton." },
+    ],
+  },
+  {
+    prompt: "In subset construction, each DFA state is…",
+    options: [
+      { text: "A subset of the NFA's states", correct: true, why: "The DFA tracks the set of all states the NFA could be in." },
+      { text: "A single NFA state, renamed", correct: false, why: "If that worked, you'd already have a DFA." },
+    ],
+  },
+  {
+    prompt: "An NFA with n states converts to a DFA with at most…",
+    options: [
+      { text: "2^n states", correct: true, why: "There are 2^n subsets — that's the worst-case exponential blowup." },
+      { text: "n^2 states", correct: false, why: "The blowup is exponential, not polynomial." },
+    ],
+  },
+  {
+    prompt: "ε-closure of state q is…",
+    options: [
+      { text: "States reachable from q via only ε-moves", correct: true, why: "The set of states the machine can silently slide into from q." },
+      { text: "States that can reach q on any input", correct: false, why: "That's reverse reachability, not ε-closure." },
+    ],
+  },
+  {
+    prompt: "Which language can an NFA NOT recognize?",
+    options: [
+      { text: "{ aⁿbⁿ : n ≥ 0 }", correct: true, why: "Non-regular — needs unbounded counting that NFAs lack." },
+      { text: "Strings containing '101'", correct: false, why: "This is regular — easy NFA: guess where '101' starts." },
+    ],
+  },
+  {
+    prompt: "Thompson's construction turns a regex into…",
+    options: [
+      { text: "An NFA with ε-transitions", correct: true, why: "Each operator becomes a small NFA gadget glued by ε-transitions." },
+      { text: "A minimal DFA directly", correct: false, why: "It produces an NFA — DFA conversion is a separate step." },
+    ],
+  },
+  {
+    prompt: "δ(q₀, a) = {q₁, q₂} means…",
+    options: [
+      { text: "On 'a' from q₀, machine could be in q₁ or q₂", correct: true, why: "Multiple targets is exactly what nondeterminism allows." },
+      { text: "Invalid — δ must return one state", correct: false, why: "That rule is for DFAs. NFAs map to a SET." },
+    ],
+  },
+  {
+    prompt: "ε-NFAs vs NFAs without ε:",
+    options: [
+      { text: "Same class of languages", correct: true, why: "ε-transitions can always be eliminated using ε-closures." },
+      { text: "ε-NFAs are strictly more powerful", correct: false, why: "Common misconception — ε is convenience, not power." },
+    ],
+  },
+];
+
+function shuffled<T>(arr: T[]): T[] {
+  const copy = [...arr];
+  for (let i = copy.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [copy[i], copy[j]] = [copy[j], copy[i]];
+  }
+  return copy;
+}
+
+const GATE_DURATION_MS = 7000;
+const TRACK_HEIGHT = 560;
+const PLAYER_BOTTOM = 60;
+
+export default function BrainEvolution() {
+  const [stage, setStage] = useState(START_STAGE);
+  const [bestStage, setBestStage] = useState(START_STAGE);
+  const [questionIndex, setQuestionIndex] = useState(0);
+  const [questionOrder, setQuestionOrder] = useState(() => shuffled(QUESTIONS.map((_, i) => i)));
+  const [lane, setLane] = useState<0 | 1>(0);
+  const [committed, setCommitted] = useState(false);
+  const [streak, setStreak] = useState(0);
+  const [stats, setStats] = useState({ correct: 0, wrong: 0 });
+  const [running, setRunning] = useState(false);
+  const [colliding, setColliding] = useState(false);
+  const [feedback, setFeedback] = useState<{ correct: boolean; why: string; chosen: string } | null>(null);
+  const [shake, setShake] = useState(false);
+  const [evolved, setEvolved] = useState<"up" | "down" | null>(null);
+  const [finished, setFinished] = useState(false);
+  const [roundKey, setRoundKey] = useState(0);
+  const [optionLayout, setOptionLayout] = useState<{ left: { text: string; correct: boolean; why: string }; right: { text: string; correct: boolean; why: string } } | null>(null);
+
+  const currentQ = QUESTIONS[questionOrder[questionIndex] ?? 0]!;
+  const currentStage = STAGES[stage]!;
+  const resolvedRef = useRef(false);
+  const laneRef = useRef<0 | 1>(0);
+  const committedRef = useRef(false);
+
+  const setupRound = useCallback(() => {
+    const opts = shuffled(currentQ.options);
+    setOptionLayout({ left: opts[0]!, right: opts[1]! });
+    resolvedRef.current = false;
+    committedRef.current = false;
+    setCommitted(false);
+    setColliding(false);
+    setFeedback(null);
+    setEvolved(null);
+    setLane(0);
+    laneRef.current = 0;
+    setRoundKey((k) => k + 1);
+    setRunning(true);
+  }, [currentQ]);
+
+  useEffect(() => {
+    if (!finished && running === false && feedback === null && optionLayout === null) {
+      setupRound();
+    }
+  }, [finished, running, feedback, optionLayout, setupRound]);
+
+  // Commit lane: lock in choice, character moves — gate still falling
+  const commitLane = useCallback((l: 0 | 1) => {
+    if (!running || committedRef.current) return;
+    committedRef.current = true;
+    laneRef.current = l;
+    setLane(l);
+    setCommitted(true);
+  }, [running]);
+
+  const resolveRound = useCallback(
+    (chosenLane: 0 | 1) => {
+      if (resolvedRef.current || !optionLayout) return;
+      resolvedRef.current = true;
+      // collision flash
+      setColliding(true);
+      setTimeout(() => setColliding(false), 350);
+      setRunning(false);
+      const chosen = chosenLane === 0 ? optionLayout.left : optionLayout.right;
+
+      if (chosen.correct) {
+        setStats((s) => ({ ...s, correct: s.correct + 1 }));
+        setStreak((s) => s + 1);
+        const newStage = Math.min(STAGES.length - 1, stage + 1);
+        if (newStage !== stage) {
+          setStage(newStage);
+          setBestStage((b) => Math.max(b, newStage));
+          setEvolved("up");
+        }
+      } else {
+        setStats((s) => ({ ...s, wrong: s.wrong + 1 }));
+        setStreak(0);
+        setShake(true);
+        setTimeout(() => setShake(false), 500);
+        const newStage = Math.max(0, stage - 1);
+        if (newStage !== stage) {
+          setStage(newStage);
+          setEvolved("down");
+        }
+      }
+
+      setFeedback({ correct: chosen.correct, why: chosen.why, chosen: chosen.text });
+      setTimeout(() => setEvolved(null), 900);
+    },
+    [optionLayout, stage]
+  );
+
+  // When gate animation ends: resolve using whichever lane was committed (or default 0)
+  useEffect(() => {
+    if (!running) return;
+    const t = setTimeout(() => {
+      resolveRound(laneRef.current);
+    }, GATE_DURATION_MS);
+    return () => clearTimeout(t);
+  }, [running, roundKey, resolveRound]);
+
+  // Keyboard: steer freely, lock on Enter/Space after choosing
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!running) return;
+      if (e.key === "ArrowLeft" || e.key === "a" || e.key === "A") {
+        commitLane(0);
+      } else if (e.key === "ArrowRight" || e.key === "d" || e.key === "D") {
+        commitLane(1);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [running, commitLane]);
+
+  const handleNext = () => {
+    setOptionLayout(null);
+    setFeedback(null);
+    if (questionIndex + 1 >= questionOrder.length) {
+      setFinished(true);
+    } else {
+      setQuestionIndex((i) => i + 1);
+      setLane(0);
+    }
+  };
+
+  const handleReset = () => {
+    setStage(START_STAGE);
+    setBestStage(START_STAGE);
+    setQuestionIndex(0);
+    setQuestionOrder(shuffled(QUESTIONS.map((_, i) => i)));
+    setLane(0);
+    setStreak(0);
+    setStats({ correct: 0, wrong: 0 });
+    setFeedback(null);
+    setRunning(false);
+    setOptionLayout(null);
+    setFinished(false);
+    setEvolved(null);
+  };
+
+  const trackBg = useMemo(
+    () => ({
+      backgroundImage: `repeating-linear-gradient(0deg, transparent 0 60px, rgba(168,85,247,0.18) 60px 64px)`,
+    }),
+    []
+  );
+
+  if (finished) {
+    const finalStage = STAGES[bestStage]!;
+    return (
+      <div className="min-h-[100dvh] w-full bg-background text-foreground relative">
+        <div
+          className="absolute inset-0 pointer-events-none opacity-[0.03] z-0"
+          style={{ backgroundImage: "radial-gradient(circle at center, white 1px, transparent 1px)", backgroundSize: "24px 24px" }}
+        />
+        <div className="max-w-3xl mx-auto px-6 py-12 relative z-10">
+          <Link href="/" className="inline-flex items-center gap-2 text-primary hover:text-primary/80 mb-8 uppercase tracking-widest text-sm font-bold">
+            <ArrowLeft className="w-4 h-4" /> Back to Arcade
+          </Link>
+          <Card className="border-2 border-primary/40 bg-card/80 backdrop-blur-md text-center">
+            <CardHeader>
+              <div className="flex justify-center mb-2">
+                <Trophy className="w-10 h-10 text-primary" />
+              </div>
+              <CardTitle className="text-4xl uppercase tracking-tighter">Run Complete</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-6">
+              <motion.img
+                src={finalStage.img}
+                alt={finalStage.name}
+                className={`w-56 h-56 mx-auto rounded-full bg-white object-contain ${finalStage.glow}`}
+                initial={{ scale: 0.6, opacity: 0 }}
+                animate={{ scale: 1, opacity: 1 }}
+                transition={{ type: "spring", bounce: 0.5 }}
+              />
+              <div>
+                <div className="text-xs uppercase tracking-widest text-muted-foreground mb-1">Highest evolution reached</div>
+                <div className="text-2xl font-bold text-primary">{finalStage.name}</div>
+                <div className="text-sm text-muted-foreground italic">{finalStage.tag}</div>
+              </div>
+              <div className="flex justify-center gap-4 flex-wrap">
+                <Badge variant="outline" className="bg-green-500/10 border-green-500/40 text-green-400 text-base px-4 py-2">
+                  {stats.correct} correct
+                </Badge>
+                <Badge variant="outline" className="bg-red-500/10 border-red-500/40 text-red-400 text-base px-4 py-2">
+                  {stats.wrong} wrong
+                </Badge>
+              </div>
+              <Button onClick={handleReset} className="rounded-2xl gap-2" size="lg">
+                <RotateCcw className="w-4 h-4" /> Run Again
+              </Button>
+            </CardContent>
+          </Card>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="min-h-[100dvh] w-full bg-background text-foreground relative overflow-hidden">
+      <div
+        className="absolute inset-0 pointer-events-none opacity-[0.03] z-0"
+        style={{ backgroundImage: "radial-gradient(circle at center, white 1px, transparent 1px)", backgroundSize: "24px 24px" }}
+      />
+
+      <div className="max-w-7xl mx-auto px-6 py-6 relative z-10">
+        <div className="flex items-center justify-between mb-4 flex-wrap gap-3">
+          <Link href="/" className="inline-flex items-center gap-2 text-primary hover:text-primary/80 uppercase tracking-widest text-sm font-bold">
+            <ArrowLeft className="w-4 h-4" /> Back to Arcade
+          </Link>
+          <div className="flex gap-2 items-center flex-wrap">
+            <Badge variant="outline" className="bg-card/60 backdrop-blur px-3 py-1.5">
+              <Sparkles className="w-3.5 h-3.5 mr-1.5 text-primary" />
+              Streak: <span className="ml-1 font-bold text-primary">{streak}</span>
+            </Badge>
+            <Badge variant="outline" className="bg-card/60 backdrop-blur px-3 py-1.5">
+              Q {questionIndex + 1} / {questionOrder.length}
+            </Badge>
+            <Badge variant="outline" className="bg-green-500/10 border-green-500/40 text-green-400 px-2 py-1.5">✓ {stats.correct}</Badge>
+            <Badge variant="outline" className="bg-red-500/10 border-red-500/40 text-red-400 px-2 py-1.5">✕ {stats.wrong}</Badge>
+            <Button variant="ghost" size="sm" onClick={handleReset} className="gap-1.5">
+              <RotateCcw className="w-3.5 h-3.5" /> Reset
+            </Button>
+          </div>
+        </div>
+
+        <div className="text-center mb-4">
+          <h1 className="text-3xl md:text-5xl font-extrabold tracking-tighter uppercase inline-flex items-center gap-3">
+            <Brain className="w-8 h-8 text-primary" />
+            Brain <span className="text-transparent bg-clip-text bg-gradient-to-r from-primary to-secondary">Run</span>
+          </h1>
+          <p className="text-sm text-muted-foreground mt-1">Steer with ← → or A / D. Pick the right gate. NFA edition.</p>
+        </div>
+
+        <div className="grid lg:grid-cols-[360px_1fr] gap-6 items-start">
+          {/* Side panel: character + ladder + concept */}
+          <div className="space-y-4">
+            <Card className="border-2 border-primary/30 bg-card/80 backdrop-blur-md">
+              <CardContent className="p-5 text-center">
+                <div className="text-xs uppercase tracking-widest text-muted-foreground">Stage {stage} / {STAGES.length - 1}</div>
+                <div className="text-xl font-bold text-primary mt-1">{currentStage.name}</div>
+                <div className="text-xs text-muted-foreground italic mt-0.5">"{currentStage.tag}"</div>
+
+                <div className="mt-4">
+                  <div className="text-xs uppercase tracking-widest text-muted-foreground mb-2">Evolution Ladder</div>
+                  <div className="flex justify-between items-end gap-1 px-1">
+                    {STAGES.map((s, i) => (
+                      <div
+                        key={i}
+                        className={`flex-1 rounded-sm transition-all ${
+                          i === stage
+                            ? "bg-primary h-8 shadow-[0_0_10px_rgba(255,0,255,0.7)]"
+                            : i < stage
+                              ? "bg-primary/40 h-5"
+                              : "bg-muted/30 h-3"
+                        }`}
+                        title={s.name}
+                      />
+                    ))}
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+
+            <Card className="border border-border bg-card/40 backdrop-blur-sm">
+              <CardHeader className="py-3">
+                <CardTitle className="text-xs uppercase tracking-widest text-muted-foreground">Concept: NFA</CardTitle>
+              </CardHeader>
+              <CardContent className="text-xs text-foreground/80 leading-relaxed space-y-2">
+                <p>
+                  An NFA <span className="font-mono text-primary">(Q, Σ, δ, q₀, F)</span> uses
+                  <span className="font-mono"> δ : Q × (Σ ∪ {"{ε}"}) → 𝒫(Q)</span>: from one state on one symbol it can go to a SET of states.
+                </p>
+                <p>
+                  It accepts when at least one path ends in an accept state. NFAs and DFAs recognize the same languages — subset construction proves it (with up to 2ⁿ DFA states).
+                </p>
+              </CardContent>
+            </Card>
+          </div>
+
+          {/* Runner track */}
+          <Card className="border-2 border-secondary/30 bg-card/80 backdrop-blur-md overflow-hidden">
+            <CardHeader className="py-3 border-b border-border">
+              <CardTitle className="text-base leading-snug text-center px-2">{currentQ.prompt}</CardTitle>
+            </CardHeader>
+            <CardContent className="p-0">
+              <div
+                className="relative w-full bg-gradient-to-b from-purple-950/40 via-background to-background overflow-hidden"
+                style={{ height: TRACK_HEIGHT, ...trackBg }}
+              >
+                {/* Collision flash overlay */}
+                <AnimatePresence>
+                  {colliding && (
+                    <motion.div
+                      className="absolute inset-0 z-20 pointer-events-none"
+                      initial={{ opacity: 0.7 }}
+                      animate={{ opacity: 0 }}
+                      transition={{ duration: 0.35 }}
+                      style={{ backgroundColor: feedback?.correct ? "rgba(34,197,94,0.3)" : "rgba(239,68,68,0.3)" }}
+                    />
+                  )}
+                </AnimatePresence>
+
+                {/* Lane divider */}
+                <div className="absolute top-0 bottom-0 left-1/2 w-px bg-gradient-to-b from-primary/0 via-primary/40 to-primary/0 -translate-x-1/2" />
+
+                {/* Side glow walls */}
+                <div className="absolute inset-y-0 left-0 w-12 bg-gradient-to-r from-secondary/20 to-transparent pointer-events-none" />
+                <div className="absolute inset-y-0 right-0 w-12 bg-gradient-to-l from-primary/20 to-transparent pointer-events-none" />
+
+                {/* Gates */}
+                {optionLayout && (
+                  <motion.div
+                    key={roundKey}
+                    className="absolute inset-x-0 flex justify-around items-center pointer-events-none"
+                    style={{ height: 110 }}
+                    initial={{ top: -120 }}
+                    animate={{ top: TRACK_HEIGHT - PLAYER_BOTTOM - 110 }}
+                    transition={{ duration: GATE_DURATION_MS / 1000, ease: "linear" }}
+                  >
+                    <Gate
+                      text={optionLayout.left.text}
+                      side="left"
+                      highlight={committed && lane === 0}
+                      dimmed={committed && lane !== 0}
+                    />
+                    <Gate
+                      text={optionLayout.right.text}
+                      side="right"
+                      highlight={committed && lane === 1}
+                      dimmed={committed && lane !== 1}
+                    />
+                  </motion.div>
+                )}
+
+                {/* Player character */}
+                <motion.div
+                  className="absolute"
+                  style={{ bottom: PLAYER_BOTTOM, width: "50%" }}
+                  animate={{ left: lane === 0 ? "0%" : "50%" }}
+                  transition={{ type: "spring", stiffness: 320, damping: 28 }}
+                >
+                  <div className="flex justify-center">
+                    <motion.img
+                      src={currentStage.img}
+                      alt={currentStage.name}
+                      className={`w-24 h-24 rounded-full bg-white object-contain ${currentStage.glow}`}
+                      animate={{
+                        y: shake ? [0, -6, 6, -6, 0] : running ? [0, -6, 0] : 0,
+                        rotate: shake ? [0, -10, 10, -10, 0] : 0,
+                        scale: colliding ? [1, 1.25, 1] : 1,
+                      }}
+                      transition={
+                        shake
+                          ? { duration: 0.4 }
+                          : colliding
+                            ? { duration: 0.35 }
+                            : running
+                              ? { duration: 0.5, repeat: Infinity, ease: "easeInOut" }
+                              : { duration: 0.3 }
+                      }
+                    />
+                  </div>
+                </motion.div>
+
+                {/* Commit hint */}
+                {running && !committed && (
+                  <div className="absolute bottom-2 left-0 right-0 flex justify-center pointer-events-none">
+                    <span className="text-xs text-muted-foreground/60 uppercase tracking-widest animate-pulse">
+                      Click Left or Right to choose
+                    </span>
+                  </div>
+                )}
+
+                {/* Locked-in indicator */}
+                {committed && running && (
+                  <div className="absolute bottom-2 left-0 right-0 flex justify-center pointer-events-none">
+                    <span className="text-xs text-primary/80 uppercase tracking-widest font-bold">
+                      Locked in — brace for impact
+                    </span>
+                  </div>
+                )}
+
+                {/* Evolution flash */}
+                <AnimatePresence>
+                  {evolved && (
+                    <motion.div
+                      className="absolute inset-0 pointer-events-none flex items-center justify-center z-10"
+                      initial={{ opacity: 0 }}
+                      animate={{ opacity: 1 }}
+                      exit={{ opacity: 0 }}
+                    >
+                      <div
+                        className={`text-5xl font-extrabold tracking-tighter uppercase ${
+                          evolved === "up" ? "text-green-400" : "text-red-400"
+                        } drop-shadow-[0_0_20px_currentColor]`}
+                      >
+                        {evolved === "up" ? "EVOLVED" : "DEVOLVED"}
+                      </div>
+                    </motion.div>
+                  )}
+                </AnimatePresence>
+
+                {/* Feedback overlay */}
+                <AnimatePresence>
+                  {feedback && (
+                    <motion.div
+                      className="absolute inset-0 bg-background/85 backdrop-blur-sm flex items-center justify-center p-6 z-10"
+                      initial={{ opacity: 0 }}
+                      animate={{ opacity: 1 }}
+                      exit={{ opacity: 0 }}
+                    >
+                      <div
+                        className={`max-w-md w-full p-6 rounded-2xl border-2 text-center ${
+                          feedback.correct
+                            ? "border-green-500/60 bg-green-500/10"
+                            : "border-red-500/60 bg-red-500/10"
+                        }`}
+                      >
+                        <div className={`text-2xl font-extrabold uppercase tracking-widest mb-1 ${feedback.correct ? "text-green-400" : "text-red-400"}`}>
+                          {feedback.correct ? "Correct!" : "Wrong!"}
+                        </div>
+                        <div className="text-sm text-muted-foreground mb-1">You chose: "{feedback.chosen}"</div>
+                        <p className="text-sm text-foreground/80 mb-4">{feedback.why}</p>
+                        <Button onClick={handleNext} className="rounded-2xl gap-2" size="lg">
+                          <Play className="w-4 h-4" />
+                          {questionIndex + 1 >= questionOrder.length ? "See Final Form" : "Next Run"}
+                        </Button>
+                      </div>
+                    </motion.div>
+                  )}
+                </AnimatePresence>
+              </div>
+
+              {/* Controls */}
+              <div className="grid grid-cols-2 gap-3 p-3 border-t border-border">
+                <Button
+                  variant={committed && lane === 0 ? "default" : "outline"}
+                  className={`rounded-xl h-14 text-lg font-bold gap-2 transition-all ${committed && lane === 0 ? "ring-2 ring-secondary shadow-[0_0_15px_rgba(34,211,238,0.5)]" : ""}`}
+                  onMouseDown={() => commitLane(0)}
+                  onTouchStart={() => commitLane(0)}
+                  disabled={!running || committed}
+                >
+                  <ChevronLeft className="w-6 h-6" /> Left
+                </Button>
+                <Button
+                  variant={committed && lane === 1 ? "default" : "outline"}
+                  className={`rounded-xl h-14 text-lg font-bold gap-2 transition-all ${committed && lane === 1 ? "ring-2 ring-primary shadow-[0_0_15px_rgba(255,0,255,0.5)]" : ""}`}
+                  onMouseDown={() => commitLane(1)}
+                  onTouchStart={() => commitLane(1)}
+                  disabled={!running || committed}
+                >
+                  Right <ChevronRight className="w-6 h-6" />
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function Gate({ text, side, highlight, dimmed }: { text: string; side: "left" | "right"; highlight: boolean; dimmed: boolean }) {
+  const baseClass =
+    side === "left"
+      ? highlight
+        ? "border-secondary bg-secondary/25 shadow-[0_0_40px_rgba(34,211,238,0.8)] scale-105"
+        : dimmed
+          ? "border-secondary/15 bg-secondary/3 opacity-30"
+          : "border-secondary/40 bg-secondary/5"
+      : highlight
+        ? "border-primary bg-primary/25 shadow-[0_0_40px_rgba(255,0,255,0.8)] scale-105"
+        : dimmed
+          ? "border-primary/15 bg-primary/3 opacity-30"
+          : "border-primary/40 bg-primary/5";
+  return (
+    <div className="w-[44%] h-full flex items-center justify-center">
+      <div
+        className={`relative w-full h-full rounded-2xl border-2 flex items-center justify-center px-3 text-center transition-all duration-300 ${baseClass}`}
+      >
+        <div
+          className={`absolute inset-x-0 -top-3 mx-auto w-10 h-6 rounded-md text-xs font-bold uppercase flex items-center justify-center ${
+            side === "left" ? "bg-secondary text-secondary-foreground" : "bg-primary text-primary-foreground"
+          }`}
+        >
+          {side === "left" ? "L" : "R"}
+        </div>
+        <div className={`text-sm md:text-base font-semibold leading-tight ${highlight ? "text-foreground" : "text-foreground/70"}`}>{text}</div>
+      </div>
+    </div>
+  );
+}
