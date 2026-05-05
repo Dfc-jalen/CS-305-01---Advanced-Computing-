@@ -1,0 +1,557 @@
+import { useState, useEffect, useRef } from "react";
+import { Link } from "wouter";
+import { motion, AnimatePresence } from "framer-motion";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
+import { Cpu, ArrowLeft, RotateCcw, Trophy, ChevronRight, CheckCircle2, XCircle } from "lucide-react";
+
+type TransitionRow = { from: string; on: string; to: string | string[] };
+type StateInfo = { name: string; isStart: boolean; isAccept: boolean };
+
+type MachineQuestion = {
+  id: string;
+  machineType: "DFA" | "NFA" | "TM";
+  description: string;
+  states: StateInfo[];
+  alphabet: string;
+  transitions: TransitionRow[];
+  options: string[];
+  correctIndex: number;
+  explanation: string;
+};
+
+const QUESTIONS: MachineQuestion[] = [
+  {
+    id: "q1",
+    machineType: "DFA",
+    description: "Accepts binary strings that end with '1'.",
+    alphabet: "{0, 1}",
+    states: [
+      { name: "q0", isStart: true, isAccept: false },
+      { name: "q1", isStart: false, isAccept: true },
+    ],
+    transitions: [
+      { from: "q0", on: "0", to: "q0" },
+      { from: "q0", on: "1", to: "q1" },
+      { from: "q1", on: "0", to: "q0" },
+      { from: "q1", on: "1", to: "q1" },
+    ],
+    options: ["1010", "1011", "1100", "0110"],
+    correctIndex: 1,
+    explanation: "'1011' ends with '1', so the DFA lands in q1 (accept). All others end with '0'.",
+  },
+  {
+    id: "q2",
+    machineType: "DFA",
+    description: "Accepts strings over {a,b} with even length.",
+    alphabet: "{a, b}",
+    states: [
+      { name: "even", isStart: true, isAccept: true },
+      { name: "odd", isStart: false, isAccept: false },
+    ],
+    transitions: [
+      { from: "even", on: "a", to: "odd" },
+      { from: "even", on: "b", to: "odd" },
+      { from: "odd", on: "a", to: "even" },
+      { from: "odd", on: "b", to: "even" },
+    ],
+    options: ["ab", "aba", "a", "bab"],
+    correctIndex: 0,
+    explanation: "'ab' has length 2 (even), ending in state 'even' which is the accept state.",
+  },
+  {
+    id: "q3",
+    machineType: "NFA",
+    description: "Accepts strings over {0,1} containing '01' as a substring. Uses nondeterminism to guess where '01' starts.",
+    alphabet: "{0, 1}",
+    states: [
+      { name: "q0", isStart: true, isAccept: false },
+      { name: "q1", isStart: false, isAccept: false },
+      { name: "q2", isStart: false, isAccept: true },
+    ],
+    transitions: [
+      { from: "q0", on: "0", to: ["q0", "q1"] },
+      { from: "q0", on: "1", to: "q0" },
+      { from: "q1", on: "1", to: "q2" },
+      { from: "q2", on: "0", to: "q2" },
+      { from: "q2", on: "1", to: "q2" },
+    ],
+    options: ["111", "100", "011", "110"],
+    correctIndex: 2,
+    explanation: "'011' contains '01' starting at index 0. The NFA guesses at position 0 and reaches q2 (accept).",
+  },
+  {
+    id: "q4",
+    machineType: "DFA",
+    description: "Accepts strings over {a,b} that start and end with the same symbol.",
+    alphabet: "{a, b}",
+    states: [
+      { name: "s", isStart: true, isAccept: false },
+      { name: "qa", isStart: false, isAccept: true },
+      { name: "qb", isStart: false, isAccept: true },
+      { name: "qam", isStart: false, isAccept: false },
+      { name: "qbm", isStart: false, isAccept: false },
+      { name: "dead", isStart: false, isAccept: false },
+    ],
+    transitions: [
+      { from: "s", on: "a", to: "qa" },
+      { from: "s", on: "b", to: "qb" },
+      { from: "qa", on: "a", to: "qa" },
+      { from: "qa", on: "b", to: "qam" },
+      { from: "qam", on: "a", to: "qa" },
+      { from: "qam", on: "b", to: "qam" },
+      { from: "qb", on: "b", to: "qb" },
+      { from: "qb", on: "a", to: "qbm" },
+      { from: "qbm", on: "b", to: "qb" },
+      { from: "qbm", on: "a", to: "qbm" },
+    ],
+    options: ["abba", "abab", "baa", "aabb"],
+    correctIndex: 0,
+    explanation: "'abba' starts and ends with 'a'. The DFA tracks first symbol and last symbol seen.",
+  },
+  {
+    id: "q5",
+    machineType: "NFA",
+    description: "Accepts strings over {a,b} that end with 'ab'. NFA nondeterministically guesses the final 'ab'.",
+    alphabet: "{a, b}",
+    states: [
+      { name: "q0", isStart: true, isAccept: false },
+      { name: "q1", isStart: false, isAccept: false },
+      { name: "q2", isStart: false, isAccept: true },
+    ],
+    transitions: [
+      { from: "q0", on: "a", to: ["q0", "q1"] },
+      { from: "q0", on: "b", to: "q0" },
+      { from: "q1", on: "b", to: "q2" },
+    ],
+    options: ["bba", "aab", "abb", "bab"],
+    correctIndex: 3,
+    explanation: "'bab' ends with 'ab'. The NFA guesses at position 1 (the 'a') and follows to q2 via 'b'.",
+  },
+  {
+    id: "q6",
+    machineType: "TM",
+    description: "This TM accepts strings of the form aⁿbⁿ (equal numbers of a's then b's). It marks off a's and b's in pairs.",
+    alphabet: "{a, b, X, Y, _}",
+    states: [
+      { name: "q0", isStart: true, isAccept: false },
+      { name: "q1", isStart: false, isAccept: false },
+      { name: "q2", isStart: false, isAccept: false },
+      { name: "q3", isStart: false, isAccept: false },
+      { name: "qacc", isStart: false, isAccept: true },
+    ],
+    transitions: [
+      { from: "q0", on: "a → X, R", to: "q1" },
+      { from: "q0", on: "Y → Y, R", to: "q3" },
+      { from: "q1", on: "a → a, R", to: "q1" },
+      { from: "q1", on: "Y → Y, R", to: "q1" },
+      { from: "q1", on: "b → Y, L", to: "q2" },
+      { from: "q2", on: "a → a, L", to: "q2" },
+      { from: "q2", on: "Y → Y, L", to: "q2" },
+      { from: "q2", on: "X → X, R", to: "q0" },
+      { from: "q3", on: "Y → Y, R", to: "q3" },
+      { from: "q3", on: "_ → _, R", to: "qacc" },
+    ],
+    options: ["aabb", "aaab", "abab", "aab"],
+    correctIndex: 0,
+    explanation: "'aabb' has n=2 a's and n=2 b's. The TM marks X/Y pairs until all matched, then accepts.",
+  },
+  {
+    id: "q7",
+    machineType: "DFA",
+    description: "Accepts binary strings divisible by 3. States represent remainder (0, 1, 2) when read left-to-right.",
+    alphabet: "{0, 1}",
+    states: [
+      { name: "r0", isStart: true, isAccept: true },
+      { name: "r1", isStart: false, isAccept: false },
+      { name: "r2", isStart: false, isAccept: false },
+    ],
+    transitions: [
+      { from: "r0", on: "0", to: "r0" },
+      { from: "r0", on: "1", to: "r1" },
+      { from: "r1", on: "0", to: "r2" },
+      { from: "r1", on: "1", to: "r0" },
+      { from: "r2", on: "0", to: "r1" },
+      { from: "r2", on: "1", to: "r2" },
+    ],
+    options: ["110", "100", "101", "111"],
+    correctIndex: 0,
+    explanation: "'110' = 6 in decimal. 6 mod 3 = 0, so the DFA lands in state r0 (accept). Others: 4, 5, 7 — none divisible by 3.",
+  },
+  {
+    id: "q8",
+    machineType: "NFA",
+    description: "Accepts strings over {0,1} that have '0' as the third symbol from the end.",
+    alphabet: "{0, 1}",
+    states: [
+      { name: "q0", isStart: true, isAccept: false },
+      { name: "q1", isStart: false, isAccept: false },
+      { name: "q2", isStart: false, isAccept: false },
+      { name: "q3", isStart: false, isAccept: true },
+    ],
+    transitions: [
+      { from: "q0", on: "0", to: ["q0", "q1"] },
+      { from: "q0", on: "1", to: "q0" },
+      { from: "q1", on: "0", to: "q2" },
+      { from: "q1", on: "1", to: "q2" },
+      { from: "q2", on: "0", to: "q3" },
+      { from: "q2", on: "1", to: "q3" },
+    ],
+    options: ["1001", "1110", "0111", "1011"],
+    correctIndex: 2,
+    explanation: "'0111': 3rd from end is index 0 = '0'. The NFA guesses at position 0, advances 3 steps to accept.",
+  },
+  {
+    id: "q9",
+    machineType: "TM",
+    description: "This TM accepts palindromes over {a, b}. It checks first and last symbols match, then erases them and repeats.",
+    alphabet: "{a, b, X, _}",
+    states: [
+      { name: "q0", isStart: true, isAccept: false },
+      { name: "qa", isStart: false, isAccept: false },
+      { name: "qb", isStart: false, isAccept: false },
+      { name: "qL", isStart: false, isAccept: false },
+      { name: "qacc", isStart: false, isAccept: true },
+    ],
+    transitions: [
+      { from: "q0", on: "a → X, R", to: "qa" },
+      { from: "q0", on: "b → X, R", to: "qb" },
+      { from: "q0", on: "X → X, R", to: "qacc" },
+      { from: "q0", on: "_ → _, R", to: "qacc" },
+      { from: "qa", on: "a → a, R", to: "qa" },
+      { from: "qa", on: "b → b, R", to: "qa" },
+      { from: "qa", on: "a → X, L", to: "qL" },
+      { from: "qb", on: "b → X, L", to: "qL" },
+      { from: "qL", on: "a → a, L", to: "qL" },
+      { from: "qL", on: "X → X, R", to: "q0" },
+    ],
+    options: ["abba", "abbb", "aabb", "abbc"],
+    correctIndex: 0,
+    explanation: "'abba' is a palindrome — reads the same forwards and backwards. The TM matches a↔a, b↔b.",
+  },
+  {
+    id: "q10",
+    machineType: "DFA",
+    description: "Accepts strings over {a,b} where every 'a' is immediately followed by 'b'.",
+    alphabet: "{a, b}",
+    states: [
+      { name: "q0", isStart: true, isAccept: true },
+      { name: "q1", isStart: false, isAccept: false },
+      { name: "dead", isStart: false, isAccept: false },
+    ],
+    transitions: [
+      { from: "q0", on: "a", to: "q1" },
+      { from: "q0", on: "b", to: "q0" },
+      { from: "q1", on: "b", to: "q0" },
+      { from: "q1", on: "a", to: "dead" },
+      { from: "dead", on: "a", to: "dead" },
+      { from: "dead", on: "b", to: "dead" },
+    ],
+    options: ["ababab", "aabab", "abba", "aab"],
+    correctIndex: 0,
+    explanation: "'ababab': every 'a' is immediately followed by 'b'. Pattern: (ab)*. DFA returns to q0 each time.",
+  },
+];
+
+function shuffled<T>(arr: T[]): T[] {
+  const a = [...arr];
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
+}
+
+function TapeCell({ char, active, done }: { char: string; active: boolean; done: boolean }) {
+  return (
+    <motion.div
+      layout
+      className={`w-12 h-14 flex items-center justify-center border-2 rounded-md font-mono text-xl font-bold transition-all ${
+        active
+          ? "border-chart-4 bg-chart-4/20 text-chart-4 shadow-[0_0_12px_rgba(0,255,0,0.4)] scale-110"
+          : done
+            ? "border-chart-4/40 bg-chart-4/5 text-chart-4/60"
+            : "border-border bg-black/40 text-foreground"
+      }`}
+    >
+      {char === "_" ? <span className="opacity-20">_</span> : char}
+    </motion.div>
+  );
+}
+
+type MachineTypeBadgeProps = { type: "DFA" | "NFA" | "TM" };
+function MachineTypeBadge({ type }: MachineTypeBadgeProps) {
+  const colors: Record<string, string> = {
+    DFA: "border-primary/60 text-primary bg-primary/10",
+    NFA: "border-secondary/60 text-secondary bg-secondary/10",
+    TM: "border-chart-4/60 text-chart-4 bg-chart-4/10",
+  };
+  return (
+    <Badge variant="outline" className={`text-xs uppercase tracking-widest font-bold ${colors[type]}`}>
+      {type}
+    </Badge>
+  );
+}
+
+export default function TuringTinker() {
+  const [order] = useState(() => shuffled(QUESTIONS.map((_, i) => i)));
+  const [qIdx, setQIdx] = useState(0);
+  const [picked, setPicked] = useState<number | null>(null);
+  const [animStep, setAnimStep] = useState(-1);
+  const [score, setScore] = useState(0);
+  const [streak, setStreak] = useState(0);
+  const [finished, setFinished] = useState(false);
+  const animRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const q = QUESTIONS[order[qIdx]!]!;
+  const tape = picked !== null ? q.options[picked]!.split("") : [];
+  const isCorrect = picked === q.correctIndex;
+
+  useEffect(() => {
+    if (picked !== null && isCorrect) {
+      let step = 0;
+      const run = () => {
+        setAnimStep(step);
+        step++;
+        if (step <= tape.length) {
+          animRef.current = setTimeout(run, 380);
+        }
+      };
+      animRef.current = setTimeout(run, 200);
+    }
+    return () => { if (animRef.current) clearTimeout(animRef.current); };
+  }, [picked]);
+
+  const handlePick = (idx: number) => {
+    if (picked !== null) return;
+    setPicked(idx);
+    if (idx === q.correctIndex) {
+      setScore((s) => s + 10 + streak * 2);
+      setStreak((s) => s + 1);
+    } else {
+      setStreak(0);
+    }
+  };
+
+  const handleNext = () => {
+    setPicked(null);
+    setAnimStep(-1);
+    if (qIdx + 1 >= order.length) {
+      setFinished(true);
+    } else {
+      setQIdx((i) => i + 1);
+    }
+  };
+
+  const handleReset = () => {
+    setPicked(null);
+    setAnimStep(-1);
+    setScore(0);
+    setStreak(0);
+    setFinished(false);
+    setQIdx(0);
+  };
+
+  if (finished) {
+    const grade = score >= 80 ? "Distinguished" : score >= 50 ? "Proficient" : "Keep Practicing";
+    return (
+      <div className="min-h-[100dvh] w-full bg-background text-foreground flex items-center justify-center relative">
+        <div className="absolute inset-0 pointer-events-none opacity-[0.03]" style={{ backgroundImage: "radial-gradient(circle at center, white 1px, transparent 1px)", backgroundSize: "24px 24px" }} />
+        <Card className="max-w-md w-full border-2 border-chart-4/40 bg-card/90 backdrop-blur-md text-center mx-6">
+          <CardHeader>
+            <div className="flex justify-center mb-2"><Trophy className="w-10 h-10 text-chart-4" /></div>
+            <CardTitle className="text-3xl uppercase tracking-tighter">Quiz Complete</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="text-5xl font-extrabold text-chart-4">{score} pts</div>
+            <div className="text-muted-foreground uppercase tracking-widest text-sm">{grade}</div>
+            <Button onClick={handleReset} className="gap-2 bg-chart-4 text-black hover:bg-chart-4/80 rounded-2xl font-bold uppercase tracking-widest" size="lg">
+              <RotateCcw className="w-4 h-4" /> Try Again
+            </Button>
+            <div className="pt-2">
+              <Link href="/" className="text-sm text-muted-foreground hover:text-foreground underline">Back to Arcade</Link>
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+
+  return (
+    <div className="min-h-[100dvh] w-full bg-background text-foreground overflow-hidden relative">
+      <div className="absolute inset-0 pointer-events-none opacity-[0.03] z-0" style={{ backgroundImage: "radial-gradient(circle at center, white 1px, transparent 1px)", backgroundSize: "24px 24px" }} />
+
+      <div className="max-w-5xl mx-auto px-6 py-6 relative z-10">
+        <div className="flex items-center justify-between mb-6 flex-wrap gap-3">
+          <Link href="/" className="inline-flex items-center gap-2 text-chart-4 hover:text-chart-4/80 uppercase tracking-widest text-sm font-bold">
+            <ArrowLeft className="w-4 h-4" /> Back to Arcade
+          </Link>
+          <div className="flex items-center gap-2 flex-wrap">
+            <Badge variant="outline" className="bg-card/60 px-3 py-1.5">Q {qIdx + 1} / {order.length}</Badge>
+            <Badge variant="outline" className="bg-chart-4/10 border-chart-4/40 text-chart-4 px-3 py-1.5 font-bold">{score} pts</Badge>
+            {streak > 1 && <Badge variant="outline" className="bg-orange-500/10 border-orange-500/40 text-orange-400 px-3 py-1.5">Streak x{streak}</Badge>}
+            <Button variant="ghost" size="sm" onClick={handleReset} className="gap-1.5">
+              <RotateCcw className="w-3.5 h-3.5" />
+            </Button>
+          </div>
+        </div>
+
+        <div className="text-center mb-6">
+          <div className="inline-flex items-center justify-center p-2 mb-3 rounded-full bg-chart-4/10 text-chart-4 border border-chart-4/30 shadow-[0_0_20px_rgba(0,255,0,0.2)]">
+            <Cpu className="w-6 h-6" />
+          </div>
+          <h1 className="text-4xl font-extrabold tracking-tighter uppercase">
+            Turing <span className="text-transparent bg-clip-text bg-gradient-to-r from-chart-4 to-chart-4/50">Tinker</span>
+          </h1>
+          <p className="text-sm text-muted-foreground mt-1">Pick the tape that this machine accepts.</p>
+        </div>
+
+        <div className="grid lg:grid-cols-[1fr_360px] gap-6">
+          {/* Main: options + tape */}
+          <div className="space-y-5">
+            {/* Machine description */}
+            <Card className="border border-chart-4/30 bg-card/80 backdrop-blur-md">
+              <CardContent className="p-5">
+                <div className="flex items-center gap-3 mb-3">
+                  <MachineTypeBadge type={q.machineType} />
+                  <span className="text-sm text-muted-foreground uppercase tracking-wider">machine</span>
+                </div>
+                <p className="text-base font-semibold text-foreground mb-1">{q.description}</p>
+                <div className="text-xs text-muted-foreground font-mono">Alphabet: {q.alphabet}</div>
+              </CardContent>
+            </Card>
+
+            {/* Options */}
+            <div>
+              <div className="text-xs uppercase tracking-widest text-muted-foreground mb-3 font-bold">Which tape does this machine accept?</div>
+              <div className="grid grid-cols-2 gap-3">
+                {q.options.map((opt, idx) => {
+                  const isChosen = picked === idx;
+                  const isRight = idx === q.correctIndex;
+                  const revealed = picked !== null;
+                  let cls = "border-border bg-card/60 hover:border-chart-4/50 hover:bg-chart-4/5 cursor-pointer";
+                  if (revealed && isRight) cls = "border-chart-4 bg-chart-4/15 shadow-[0_0_20px_rgba(0,255,0,0.3)]";
+                  else if (revealed && isChosen && !isRight) cls = "border-red-500 bg-red-500/10";
+                  else if (revealed) cls = "border-border/40 bg-card/30 opacity-50";
+                  return (
+                    <motion.button
+                      key={idx}
+                      onClick={() => handlePick(idx)}
+                      disabled={picked !== null}
+                      className={`relative border-2 rounded-xl p-4 text-left transition-all w-full ${cls}`}
+                      whileHover={picked === null ? { scale: 1.02 } : {}}
+                      whileTap={picked === null ? { scale: 0.98 } : {}}
+                    >
+                      <div className="flex items-center gap-2 mb-2">
+                        <div className={`w-6 h-6 rounded-full border flex items-center justify-center text-xs font-bold font-mono ${
+                          revealed && isRight ? "border-chart-4 text-chart-4" : "border-muted-foreground text-muted-foreground"
+                        }`}>
+                          {String.fromCharCode(65 + idx)}
+                        </div>
+                        {revealed && isRight && <CheckCircle2 className="w-4 h-4 text-chart-4" />}
+                        {revealed && isChosen && !isRight && <XCircle className="w-4 h-4 text-red-400" />}
+                      </div>
+                      {/* Mini tape display */}
+                      <div className="flex gap-1 flex-wrap">
+                        {opt.split("").map((ch, ci) => (
+                          <div
+                            key={ci}
+                            className={`w-8 h-8 flex items-center justify-center border rounded font-mono text-sm font-bold ${
+                              revealed && isRight && ci <= animStep
+                                ? "border-chart-4 bg-chart-4/20 text-chart-4"
+                                : "border-border/60 bg-black/30"
+                            }`}
+                          >
+                            {ch}
+                          </div>
+                        ))}
+                      </div>
+                    </motion.button>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Feedback */}
+            <AnimatePresence>
+              {picked !== null && (
+                <motion.div
+                  initial={{ opacity: 0, y: 8 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  className={`p-4 rounded-xl border-2 ${isCorrect ? "border-chart-4/60 bg-chart-4/10" : "border-red-500/60 bg-red-500/10"}`}
+                >
+                  <div className={`font-bold text-sm uppercase tracking-wide mb-1 ${isCorrect ? "text-chart-4" : "text-red-400"}`}>
+                    {isCorrect ? "Accepted" : "Rejected — try again next time"}
+                  </div>
+                  <p className="text-sm text-foreground/80">{q.explanation}</p>
+                  <Button onClick={handleNext} className="mt-3 gap-2 rounded-xl bg-chart-4 text-black hover:bg-chart-4/80 font-bold uppercase tracking-widest" size="sm">
+                    {qIdx + 1 >= order.length ? "See Score" : "Next Question"} <ChevronRight className="w-4 h-4" />
+                  </Button>
+                </motion.div>
+              )}
+            </AnimatePresence>
+          </div>
+
+          {/* Side: transition table */}
+          <div className="space-y-4">
+            <Card className="border border-chart-4/20 bg-card/80 backdrop-blur-md">
+              <CardHeader className="py-3 border-b border-border">
+                <CardTitle className="text-xs uppercase tracking-widest text-muted-foreground">States</CardTitle>
+              </CardHeader>
+              <CardContent className="p-3">
+                <div className="flex flex-wrap gap-2">
+                  {q.states.map((s) => (
+                    <div
+                      key={s.name}
+                      className={`relative flex items-center justify-center px-3 py-1.5 rounded-full border-2 font-mono text-sm font-bold ${
+                        s.isAccept ? "border-chart-4 text-chart-4 bg-chart-4/10 shadow-[0_0_8px_rgba(0,255,0,0.3)]" : "border-border text-foreground"
+                      }`}
+                    >
+                      {s.isStart && <span className="absolute -left-4 text-xs text-muted-foreground">→</span>}
+                      {s.isAccept ? `(${s.name})` : s.name}
+                    </div>
+                  ))}
+                </div>
+                <div className="mt-3 text-xs text-muted-foreground">
+                  <span className="font-mono text-chart-4">(state)</span> = accept &nbsp;&nbsp;
+                  <span className="font-mono">→</span> = start
+                </div>
+              </CardContent>
+            </Card>
+
+            <Card className="border border-chart-4/20 bg-card/80 backdrop-blur-md">
+              <CardHeader className="py-3 border-b border-border">
+                <CardTitle className="text-xs uppercase tracking-widest text-muted-foreground">Transition Table δ</CardTitle>
+              </CardHeader>
+              <CardContent className="p-0">
+                <div className="overflow-auto max-h-80">
+                  <table className="w-full text-xs font-mono">
+                    <thead className="bg-muted/20 sticky top-0">
+                      <tr>
+                        <th className="p-2 text-left text-muted-foreground border-b border-border">From</th>
+                        <th className="p-2 text-left text-muted-foreground border-b border-border">On</th>
+                        <th className="p-2 text-left text-muted-foreground border-b border-border">To</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {q.transitions.map((t, i) => (
+                        <tr key={i} className="border-b border-border/40 hover:bg-chart-4/5">
+                          <td className="p-2 text-foreground">{t.from}</td>
+                          <td className="p-2 text-secondary">{t.on}</td>
+                          <td className="p-2 text-chart-4">
+                            {Array.isArray(t.to) ? `{${t.to.join(", ")}}` : t.to}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </CardContent>
+            </Card>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
