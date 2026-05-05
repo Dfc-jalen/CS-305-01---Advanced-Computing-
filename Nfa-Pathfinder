@@ -1,0 +1,594 @@
+import React, { useState, useEffect } from "react";
+import { Link } from "wouter";
+import { motion, AnimatePresence } from "framer-motion";
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
+import { Zap, ArrowLeft, Lightbulb, Play, RotateCcw, Search, Eye } from "lucide-react";
+
+// --- Types & Data ---
+
+type NFA = {
+  id: string;
+  title: string;
+  alphabet: string[];
+  start: string;
+  accept: string[];
+  transitions: Record<string, Record<string, string[]>>; // state -> symbol -> nextStates[]
+  states: Record<string, { x: number; y: number; label: string }>;
+  description: string;
+  inputString: string;
+};
+
+const LEVELS: NFA[] = [
+  {
+    id: "l1",
+    title: "The ε-Branch",
+    alphabet: ["0", "1"],
+    start: "q0",
+    accept: ["q2"],
+    transitions: {
+      q0: { "ε": ["q1"], "0": ["q0"] },
+      q1: { "1": ["q2"] },
+      q2: { "0": ["q2"], "1": ["q2"] },
+    },
+    states: {
+      q0: { x: 100, y: 150, label: "q0" },
+      q1: { x: 300, y: 150, label: "q1" },
+      q2: { x: 500, y: 150, label: "q2" },
+    },
+    description: "Can transition from q0 to q1 without consuming any input using an ε-transition. Goal: find a path to accept '010'.",
+    inputString: "010",
+  },
+  {
+    id: "l2",
+    title: "Nondeterministic Choice",
+    alphabet: ["a", "b"],
+    start: "q0",
+    accept: ["q3"],
+    transitions: {
+      q0: { "a": ["q0", "q1"], "b": ["q0"] },
+      q1: { "b": ["q2"] },
+      q2: { "a": ["q3"] },
+      q3: {},
+    },
+    states: {
+      q0: { x: 80, y: 150, label: "q0" },
+      q1: { x: 220, y: 150, label: "q1" },
+      q2: { x: 360, y: 150, label: "q2" },
+      q3: { x: 500, y: 150, label: "q3" },
+    },
+    description: "Matches strings ending in 'aba'. At q0, reading 'a' can either stay in q0 or move to q1. Goal: find the correct path for 'ababa'.",
+    inputString: "ababa",
+  },
+  {
+    id: "l3",
+    title: "Multiple Starts (via ε)",
+    alphabet: ["0", "1"],
+    start: "q0",
+    accept: ["q2", "q4"],
+    transitions: {
+      q0: { "ε": ["q1", "q3"] },
+      q1: { "0": ["q1"], "1": ["q2"] },
+      q2: { "0": ["q1"] },
+      q3: { "1": ["q3"], "0": ["q4"] },
+      q4: { "1": ["q3"] },
+    },
+    states: {
+      q0: { x: 80, y: 150, label: "q0" },
+      q1: { x: 250, y: 80, label: "q1" },
+      q2: { x: 450, y: 80, label: "q2" },
+      q3: { x: 250, y: 220, label: "q3" },
+      q4: { x: 450, y: 220, label: "q4" },
+    },
+    description: "Matches strings that end in '1' or '0'. NFA branches immediately. Goal: path for '01010'.",
+    inputString: "01010",
+  },
+  {
+    id: "l4",
+    title: "The Maze",
+    alphabet: ["x", "y"],
+    start: "q0",
+    accept: ["q5"],
+    transitions: {
+      q0: { "x": ["q1", "q3"] },
+      q1: { "y": ["q2"], "ε": ["q4"] },
+      q2: { "x": ["q1"] },
+      q3: { "x": ["q4"], "y": ["q3"] },
+      q4: { "y": ["q5"] },
+      q5: { "x": ["q5"], "y": ["q5"] },
+    },
+    states: {
+      q0: { x: 50, y: 150, label: "q0" },
+      q1: { x: 200, y: 80, label: "q1" },
+      q2: { x: 350, y: 80, label: "q2" },
+      q3: { x: 200, y: 220, label: "q3" },
+      q4: { x: 350, y: 220, label: "q4" },
+      q5: { x: 500, y: 150, label: "q5" },
+    },
+    description: "A complex web of ε-transitions and multiple paths. Find the way for 'xyxy'.",
+    inputString: "xyxy",
+  }
+];
+
+function bfsFindPath(nfa: NFA, input: string) {
+  // queue items: { state, inputIndex, path: [{state, symbolConsumed}] }
+  const queue: { state: string, inputIndex: number, path: {state: string, symbol: string}[] }[] = [];
+  
+  // ε-closure of start state
+  const getEpsilonClosure = (states: string[]): string[] => {
+    const closure = new Set(states);
+    const stack = [...states];
+    while (stack.length > 0) {
+      const s = stack.pop()!;
+      const eTrans = nfa.transitions[s]?.["ε"] || [];
+      for (const next of eTrans) {
+        if (!closure.has(next)) {
+          closure.add(next);
+          stack.push(next);
+        }
+      }
+    }
+    return Array.from(closure);
+  };
+
+  queue.push({ state: nfa.start, inputIndex: 0, path: [{state: nfa.start, symbol: ""}] });
+
+  const visited = new Set<string>();
+
+  while (queue.length > 0) {
+    const current = queue.shift()!;
+    
+    // Check if we're done
+    if (current.inputIndex === input.length && nfa.accept.includes(current.state)) {
+      return current.path;
+    }
+
+    const stateKey = `${current.state}-${current.inputIndex}`;
+    if (visited.has(stateKey)) continue;
+    visited.add(stateKey);
+
+    // Try ε-transitions (doesn't consume input)
+    const eTrans = nfa.transitions[current.state]?.["ε"] || [];
+    for (const next of eTrans) {
+      queue.push({
+        state: next,
+        inputIndex: current.inputIndex,
+        path: [...current.path, {state: next, symbol: "ε"}]
+      });
+    }
+
+    // Try consuming input
+    if (current.inputIndex < input.length) {
+      const sym = input[current.inputIndex];
+      const sTrans = nfa.transitions[current.state]?.[sym] || [];
+      for (const next of sTrans) {
+        queue.push({
+          state: next,
+          inputIndex: current.inputIndex + 1,
+          path: [...current.path, {state: next, symbol: sym}]
+        });
+      }
+    }
+  }
+
+  return null; // No path found
+}
+
+
+function StateNode({ state, isActive, isAccept, isStart, onClick, isSelectable }: any) {
+  return (
+    <motion.div
+      onClick={isSelectable ? onClick : undefined}
+      className={`absolute flex h-[60px] w-[60px] items-center justify-center rounded-full border-4 text-base font-bold shadow-[0_0_15px_rgba(0,0,0,0.5)] ${
+        isActive ? "border-secondary bg-secondary/20 text-secondary" : "border-muted-foreground bg-card text-foreground"
+      } ${isSelectable ? "cursor-pointer hover:scale-110 hover:border-secondary/70 transition-transform" : ""}`}
+      style={{ left: state.x - 30, top: state.y - 30 }}
+      animate={{ 
+        scale: isActive ? 1.2 : 1,
+        boxShadow: isActive ? "0 0 25px var(--color-secondary)" : "0 0 5px rgba(0,0,0,0.5)"
+      }}
+      transition={{ duration: 0.3 }}
+    >
+      <div className="relative flex h-full w-full items-center justify-center rounded-full">
+        {isAccept && <div className={`absolute inset-[3px] rounded-full border-[2px] ${isActive ? "border-secondary" : "border-muted-foreground"}`} />}
+        <span>{state.label}</span>
+        {isStart && (
+          <span className="absolute -left-12 text-xs font-medium text-muted-foreground uppercase tracking-wider">start</span>
+        )}
+      </div>
+    </motion.div>
+  );
+}
+
+function Arrow({ x1, y1, x2, y2, label }: any) {
+  const dx = x2 - x1;
+  const dy = y2 - y1;
+  const angle = Math.atan2(dy, dx) * (180 / Math.PI);
+  const length = Math.sqrt(dx * dx + dy * dy) - 60; // offset for node radius
+  
+  return (
+    <div
+      className="absolute pointer-events-none"
+      style={{ 
+        left: x1 + 30 * Math.cos(Math.atan2(dy, dx)), 
+        top: y1 + 30 * Math.sin(Math.atan2(dy, dx)), 
+        width: length, 
+        transform: `rotate(${angle}deg)`, 
+        transformOrigin: "left center" 
+      }}
+    >
+      <div className="relative h-[2px] bg-muted-foreground/50">
+        <div 
+          className="absolute left-1/2 -translate-x-1/2 -translate-y-1/2 rounded bg-background px-1.5 py-0.5 text-xs font-mono text-foreground border border-border"
+          style={{ transform: `translate(-50%, -50%) rotate(${-angle}deg)` }}
+        >
+          {label}
+        </div>
+        <div className="absolute -right-1 -top-[5px] h-0 w-0 border-b-[6px] border-l-[10px] border-t-[6px] border-b-transparent border-l-muted-foreground/50 border-t-transparent" />
+      </div>
+    </div>
+  );
+}
+
+export default function NFAPathfinder() {
+  const [levelIndex, setLevelIndex] = useState(0);
+  const level = LEVELS[levelIndex];
+  
+  // Game state
+  const [currentStates, setCurrentStates] = useState<string[]>([level.start]); // states we are currently in
+  const [inputIndex, setInputIndex] = useState(0);
+  const [pathHistory, setPathHistory] = useState<{state: string, symbol: string}[]>([{state: level.start, symbol: ""}]);
+  
+  const [gameState, setGameState] = useState<"playing" | "won" | "lost" | "auto_playing">("playing");
+  const [showDFA, setShowDFA] = useState(false);
+
+  // Derived state
+  const remainingInput = level.inputString.slice(inputIndex);
+  const nextSymbol = level.inputString[inputIndex];
+
+  // Get valid next transitions from current states
+  const validTransitions: {from: string, to: string, sym: string}[] = [];
+  
+  if (gameState === "playing") {
+    currentStates.forEach(s => {
+      // e-transitions
+      const eTrans = level.transitions[s]?.["ε"] || [];
+      eTrans.forEach(to => validTransitions.push({from: s, to, sym: "ε"}));
+      
+      // symbol transitions
+      if (nextSymbol) {
+        const sTrans = level.transitions[s]?.[nextSymbol] || [];
+        sTrans.forEach(to => validTransitions.push({from: s, to, sym: nextSymbol}));
+      }
+    });
+  }
+
+  const isDeadEnd = validTransitions.length === 0 && inputIndex < level.inputString.length && gameState === "playing";
+  
+  useEffect(() => {
+    if (isDeadEnd) {
+      setGameState("lost");
+    } else if (inputIndex === level.inputString.length && gameState === "playing") {
+      const isAccepted = currentStates.some(s => level.accept.includes(s));
+      if (isAccepted) {
+        setGameState("won");
+      } else {
+        // Might still have e-transitions to accept states
+        const eTransToAccept = validTransitions.some(t => level.accept.includes(t.to) && t.sym === "ε");
+        if (!eTransToAccept) {
+           setGameState("lost");
+        }
+      }
+    }
+  }, [currentStates, inputIndex, isDeadEnd, gameState, level.inputString.length, level.accept, validTransitions]);
+
+
+  const handleTransitionClick = (from: string, to: string, sym: string) => {
+    if (gameState !== "playing") return;
+    
+    setPathHistory([...pathHistory, {state: to, symbol: sym}]);
+    setCurrentStates([to]);
+    if (sym !== "ε") {
+      setInputIndex(i => i + 1);
+    }
+  };
+
+  const handleReset = () => {
+    setCurrentStates([level.start]);
+    setInputIndex(0);
+    setPathHistory([{state: level.start, symbol: ""}]);
+    setGameState("playing");
+  };
+
+  const handleNextLevel = () => {
+    if (levelIndex < LEVELS.length - 1) {
+      setLevelIndex(i => i + 1);
+      const nextLevel = LEVELS[levelIndex + 1];
+      setCurrentStates([nextLevel.start]);
+      setInputIndex(0);
+      setPathHistory([{state: nextLevel.start, symbol: ""}]);
+      setGameState("playing");
+      setShowDFA(false);
+    }
+  };
+
+  const handleAutoFind = () => {
+    const path = bfsFindPath(level, level.inputString);
+    if (path) {
+      setGameState("auto_playing");
+      handleReset(); // reset to start
+      
+      // Animate path
+      let i = 1; // start at 1 since 0 is start state
+      const interval = setInterval(() => {
+        if (i < path.length) {
+          const step = path[i];
+          setCurrentStates([step.state]);
+          setPathHistory(path.slice(0, i + 1));
+          if (step.symbol !== "ε") {
+            setInputIndex(prev => prev + 1);
+          }
+          i++;
+        } else {
+          clearInterval(interval);
+          setGameState("won");
+        }
+      }, 700);
+    } else {
+      alert("No path exists!");
+    }
+  };
+
+  const generateArrows = () => {
+    const arrows: any[] = [];
+    Object.entries(level.transitions).forEach(([fromState, trans]) => {
+      Object.entries(trans).forEach(([sym, toStates]) => {
+        toStates.forEach(toState => {
+          const key = `${fromState}-${toState}`;
+          const existing = arrows.find(a => a.key === key);
+          if (existing) {
+            if (!existing.label.split(',').includes(sym)) {
+               existing.label += `,${sym}`;
+            }
+          } else {
+            const from = level.states[fromState];
+            const to = level.states[toState];
+            if (fromState === toState) {
+              arrows.push({
+                key, x1: from.x, y1: from.y - 20, x2: from.x + 20, y2: from.y - 20,
+                label: sym, isSelf: true, x: from.x, y: from.y
+              });
+            } else {
+              arrows.push({
+                key, x1: from.x, y1: from.y, x2: to.x, y2: to.y, label: sym, isSelf: false
+              });
+            }
+          }
+        });
+      });
+    });
+    return arrows;
+  };
+
+  return (
+    <div className="min-h-[100dvh] w-full bg-background text-foreground overflow-hidden relative font-sans">
+      <div className="absolute inset-0 pointer-events-none opacity-[0.03] z-0" 
+           style={{ backgroundImage: 'radial-gradient(circle at center, white 1px, transparent 1px)', backgroundSize: '24px 24px' }} />
+      
+      <div className="max-w-6xl mx-auto px-6 py-6 relative z-10 flex flex-col h-full">
+        <header className="flex items-center justify-between mb-8">
+          <Link href="/" className="flex items-center gap-2 text-secondary hover:text-secondary/80 transition-colors uppercase tracking-widest text-sm font-bold">
+            <ArrowLeft className="w-4 h-4" /> Back to Arcade
+          </Link>
+          <Badge variant="outline" className="uppercase tracking-widest border-secondary/50 text-secondary">
+            Level {levelIndex + 1}/{LEVELS.length}
+          </Badge>
+        </header>
+
+        <div className="text-center mb-8">
+          <div className="inline-flex items-center justify-center p-2 mb-4 rounded-full bg-secondary/10 text-secondary border border-secondary/30 shadow-[0_0_20px_rgba(0,255,255,0.2)]">
+            <Zap className="w-6 h-6" />
+          </div>
+          <h1 className="text-4xl font-extrabold tracking-tighter uppercase drop-shadow-[0_0_10px_rgba(255,255,255,0.1)]">
+            NFA <span className="text-transparent bg-clip-text bg-gradient-to-r from-secondary to-secondary/50">Pathfinder</span>
+          </h1>
+        </div>
+
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 flex-1">
+          
+          {/* Left Panel: Concept & Input */}
+          <div className="space-y-6">
+            <Card className="border-border bg-card/80 backdrop-blur-md">
+              <CardHeader>
+                <CardTitle className="text-xl text-secondary flex items-center gap-2">
+                  <Lightbulb className="w-5 h-5" /> Concept
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="text-sm text-muted-foreground space-y-4">
+                <p>
+                  A <strong>Nondeterministic Finite Automaton (NFA)</strong> can have multiple paths for the same input.
+                </p>
+                <ul className="list-disc pl-5 space-y-2">
+                  <li><strong>ε-transitions:</strong> Move without reading input.</li>
+                  <li><strong>Branching:</strong> Multiple destinations for one symbol.</li>
+                </ul>
+                <p className="text-secondary/80">
+                  Your goal: Manually pick the right transitions to reach an accept state.
+                </p>
+                <div className="pt-4 border-t border-border flex flex-col gap-2">
+                  <Button variant="outline" className="w-full justify-start text-xs h-8" onClick={handleAutoFind} disabled={gameState !== "playing"}>
+                    <Search className="w-4 h-4 mr-2" /> Auto-Find Path (BFS)
+                  </Button>
+                  <Button variant="outline" className="w-full justify-start text-xs h-8" onClick={() => setShowDFA(!showDFA)}>
+                    <Eye className="w-4 h-4 mr-2" /> {showDFA ? "Hide" : "Show"} Equivalent DFA Info
+                  </Button>
+                </div>
+              </CardContent>
+            </Card>
+
+            <Card className="border-secondary/20 bg-card/80 backdrop-blur-md shadow-[0_0_15px_rgba(0,255,255,0.05)]">
+              <CardHeader className="pb-2">
+                <CardTitle className="text-lg">Target String</CardTitle>
+                <CardDescription>Consume all input and end in accept</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <div className="flex gap-1 overflow-x-auto mb-4 p-4 bg-black/50 rounded-xl border border-border">
+                  {level.inputString.split("").map((char, idx) => (
+                    <motion.div
+                      key={idx}
+                      className={`w-10 h-10 flex items-center justify-center rounded-md font-mono font-bold text-xl ${
+                        idx < inputIndex 
+                          ? "bg-secondary/20 border-secondary/50 text-secondary" 
+                          : idx === inputIndex 
+                            ? "bg-primary/20 border-primary text-primary shadow-[0_0_10px_rgba(255,0,255,0.5)]" 
+                            : "bg-background border-border text-muted-foreground"
+                      }`}
+                    >
+                      {char}
+                    </motion.div>
+                  ))}
+                  {level.inputString === "" && (
+                    <div className="text-muted-foreground">Empty String (ε)</div>
+                  )}
+                </div>
+
+                <div className="space-y-2">
+                  <h4 className="text-xs font-bold uppercase tracking-wider text-muted-foreground">Available Moves:</h4>
+                  {validTransitions.length > 0 ? (
+                    <div className="flex flex-col gap-2">
+                      {validTransitions.map((t, idx) => (
+                        <Button 
+                          key={idx} 
+                          variant="outline" 
+                          className="justify-start h-auto py-2 border-secondary/30 hover:border-secondary hover:bg-secondary/10"
+                          onClick={() => handleTransitionClick(t.from, t.to, t.sym)}
+                        >
+                          <span className="font-mono bg-muted px-1.5 py-0.5 rounded text-xs mr-2">{t.from}</span>
+                          <span className="text-muted-foreground mx-1">--</span>
+                          <span className="font-bold text-secondary mx-1">{t.sym === "ε" ? "ε (free)" : t.sym}</span>
+                          <span className="text-muted-foreground mx-1">--&gt;</span>
+                          <span className="font-mono bg-muted px-1.5 py-0.5 rounded text-xs ml-2">{t.to}</span>
+                        </Button>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="text-sm text-destructive">No valid moves from current state(s).</div>
+                  )}
+                </div>
+              </CardContent>
+            </Card>
+          </div>
+
+          {/* Right Panel: NFA Graph */}
+          <div className="lg:col-span-2 space-y-6 flex flex-col">
+            <Card className={`border-border bg-card/80 backdrop-blur-md flex-1 flex flex-col overflow-hidden relative transition-colors ${gameState === "won" ? "border-green-500/50 shadow-[0_0_30px_rgba(0,255,0,0.1)]" : gameState === "lost" ? "border-red-500/50 shadow-[0_0_30px_rgba(255,0,0,0.1)]" : ""}`}>
+              <CardHeader className="pb-2 flex flex-row items-center justify-between">
+                <div>
+                  <CardTitle className="text-lg">{level.title}</CardTitle>
+                  <CardDescription>{level.description}</CardDescription>
+                </div>
+                <div className="flex gap-2">
+                  <Button size="icon" variant="outline" onClick={handleReset} title="Reset Path">
+                    <RotateCcw className="w-4 h-4" />
+                  </Button>
+                </div>
+              </CardHeader>
+              <CardContent className="flex-1 min-h-[400px] relative flex flex-col items-center justify-center p-0">
+                
+                <div className="absolute inset-4 rounded-xl border border-border bg-black/50 overflow-hidden flex items-center justify-center">
+                  <div className="relative w-full max-w-[600px] h-full max-h-[350px]">
+                    {generateArrows().map((a, i) => (
+                      a.isSelf ? (
+                        <div key={i} className="absolute w-12 h-12 border-[2px] border-muted-foreground/50 rounded-full" style={{ left: a.x - 6, top: a.y - 40 }}>
+                          <div className="absolute -top-3 left-1/2 -translate-x-1/2 bg-background px-1 text-xs font-mono border border-border rounded text-foreground">{a.label}</div>
+                          <div className="absolute bottom-[2px] -right-[3px] w-0 h-0 border-t-[5px] border-l-[8px] border-b-[5px] border-t-transparent border-l-muted-foreground/50 border-b-transparent rotate-[110deg]" />
+                        </div>
+                      ) : (
+                        <Arrow key={i} x1={a.x1} y1={a.y1} x2={a.x2} y2={a.y2} label={a.label} />
+                      )
+                    ))}
+                    
+                    {Object.entries(level.states).map(([id, state]) => (
+                      <StateNode
+                        key={id}
+                        state={state}
+                        isActive={currentStates.includes(id)}
+                        isAccept={level.accept.includes(id)}
+                        isStart={level.start === id}
+                      />
+                    ))}
+                  </div>
+                </div>
+
+                <AnimatePresence>
+                  {gameState === "won" && (
+                    <motion.div
+                      initial={{ opacity: 0, scale: 0.8 }}
+                      animate={{ opacity: 1, scale: 1 }}
+                      className="absolute inset-0 bg-green-950/80 backdrop-blur-sm flex flex-col items-center justify-center z-20"
+                    >
+                      <Zap className="w-16 h-16 text-green-400 mb-4 animate-pulse" />
+                      <h2 className="text-3xl font-black uppercase tracking-tighter mb-2 text-green-400 drop-shadow-[0_0_10px_rgba(0,255,0,0.5)]">
+                        Path Accepted!
+                      </h2>
+                      <p className="text-green-200 mb-6 font-mono text-sm">String successfully consumed.</p>
+                      <div className="flex gap-4">
+                        <Button variant="outline" className="border-green-500/50 hover:bg-green-500/20" onClick={handleReset}>
+                          <RotateCcw className="mr-2 h-4 w-4" /> Try Again
+                        </Button>
+                        <Button className="bg-green-500 text-black hover:bg-green-400" onClick={handleNextLevel}>
+                          Next Level <Play className="ml-2 h-4 w-4" />
+                        </Button>
+                      </div>
+                    </motion.div>
+                  )}
+                  {gameState === "lost" && (
+                    <motion.div
+                      initial={{ opacity: 0, scale: 0.8 }}
+                      animate={{ opacity: 1, scale: 1 }}
+                      className="absolute inset-0 bg-red-950/80 backdrop-blur-sm flex flex-col items-center justify-center z-20"
+                    >
+                      <h2 className="text-3xl font-black uppercase tracking-tighter mb-2 text-red-500 drop-shadow-[0_0_10px_rgba(255,0,0,0.5)]">
+                        Dead End
+                      </h2>
+                      <p className="text-red-200 mb-6 font-mono text-sm">Path cannot consume remaining input or end in accept.</p>
+                      <Button variant="outline" className="border-red-500/50 hover:bg-red-500/20 text-red-200 hover:text-red-100" onClick={handleReset}>
+                        <RotateCcw className="mr-2 h-4 w-4" /> Retry
+                      </Button>
+                    </motion.div>
+                  )}
+                </AnimatePresence>
+
+              </CardContent>
+              <div className="p-4 bg-muted/20 border-t border-border overflow-x-auto whitespace-nowrap text-sm font-mono text-muted-foreground flex gap-2 items-center">
+                <span className="text-foreground/50 text-xs uppercase tracking-widest font-sans">Path History:</span>
+                {pathHistory.map((p, i) => (
+                  <React.Fragment key={i}>
+                    {i > 0 && <span className="text-secondary/50">{`-${p.symbol || "ε"}->`}</span>}
+                    <Badge variant={i === pathHistory.length - 1 ? "secondary" : "outline"} className={i === pathHistory.length - 1 ? "bg-secondary/20 text-secondary" : ""}>{p.state}</Badge>
+                  </React.Fragment>
+                ))}
+              </div>
+            </Card>
+
+            {showDFA && (
+              <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}>
+                <Card className="border-secondary/30 bg-card/80 backdrop-blur-md">
+                  <CardHeader className="py-3">
+                    <CardTitle className="text-sm uppercase tracking-widest text-secondary">Subset Construction (Equivalent DFA)</CardTitle>
+                  </CardHeader>
+                  <CardContent className="text-xs text-muted-foreground">
+                    <p className="mb-2">Converting this NFA to a DFA creates states representing <em>sets</em> of NFA states (the powerset).</p>
+                    <p>Start state: <span className="font-mono text-secondary bg-secondary/10 px-1 rounded">{`{${level.start}${level.transitions[level.start]?.["ε"] ? ',' + level.transitions[level.start]["ε"].join(',') : ''}}`}</span> (ε-closure of start)</p>
+                    <p className="mt-2 text-xs opacity-50 italic">Full graph generation hidden to save arcade tokens.</p>
+                  </CardContent>
+                </Card>
+              </motion.div>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
